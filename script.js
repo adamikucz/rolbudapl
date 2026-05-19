@@ -3,6 +3,7 @@ const heroImage = document.getElementById('heroImage');
 const SUB_BACKEND_URL = 'https://rolbuda.vercel.app/api/substitutions';
 const NEWS_BACKEND_URL = 'https://rolbuda.vercel.app/api/news';
 const PLAN_BACKEND_URL = 'https://rolbuda.vercel.app/api/plan';
+const DEPARTURES_BACKEND_URL = 'https://rolbuda.vercel.app/api/departures';
 
 const substitutionsList = document.getElementById('substitutionsList');
 const subStatus = document.getElementById('subStatus');
@@ -11,6 +12,9 @@ const subCount = document.getElementById('subCount');
 const subToggle = document.getElementById('subToggle');
 const subDate = document.getElementById('subDate');
 const aiSummary = document.getElementById('aiSummary');
+
+const quickPanelMode = document.getElementById('quickPanelMode');
+const quickContent = document.getElementById('quickContent');
 
 const USER_CLASS_KEY = 'pzs2_user_class';
 const EXTRA_SUB_CLASSES_KEY = 'pzs2_extra_sub_classes';
@@ -40,6 +44,13 @@ let CURRENT_CLASS_NAME = '';
 
 let CLASSES = [];
 let lastScroll = 0;
+
+const DEPARTURES_CACHE_KEY = 'pzs2_departures_cache';
+let DEPARTURES_DATA = null;
+let DEPARTURES_OFFLINE = false;
+let BUS_SHOW_ALL = false;
+let ACTIVE_QUICK_MODE = 'buses';
+let ACTIVE_BUS_STOP = 0;
 
 /* =========================
    OGÓLNE HELPERY
@@ -113,6 +124,253 @@ function renderCell(cell) {
   return filtered
     .map(line => `<div class="lesson-line">${escapeHtml(line)}</div>`)
     .join('');
+}
+
+
+/* =========================
+   KRÓTKI SKRÓT / BUSY
+========================= */
+
+function getDepartureLimit() {
+  return window.matchMedia('(max-width: 720px)').matches ? 3 : 5;
+}
+
+function saveDeparturesCache(data) {
+  try {
+    localStorage.setItem(DEPARTURES_CACHE_KEY, JSON.stringify({
+      savedAt: Date.now(),
+      data
+    }));
+  } catch {
+    // localStorage może być pełny albo niedostępny — wtedy po prostu nie zapisujemy fallbacku.
+  }
+}
+
+function loadDeparturesCache() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(DEPARTURES_CACHE_KEY) || 'null');
+    return cached?.data ? cached : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatDataTime(timestamp) {
+  if (!timestamp) return '';
+
+  const date = new Date(Number(timestamp) * 1000);
+
+  if (Number.isNaN(date.getTime())) return '';
+
+  return date.toLocaleTimeString('pl-PL', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function getDepartureMeta(dep) {
+  const meta = [];
+
+  if (dep.platform) meta.push(`stanowisko ${dep.platform}`);
+  if (dep.estimated) meta.push('na żywo');
+  else meta.push('rozkład');
+  if (dep.delayMinutes > 0) meta.push(`+${dep.delayMinutes} min`);
+  if (dep.delayMinutes < 0) meta.push(`${dep.delayMinutes} min`);
+
+  return meta.join(' · ');
+}
+
+function renderDepartureRow(dep) {
+  const cancelled = dep.canceled ? ' cancelled' : '';
+  const direction = dep.direction || 'Kierunek niepodany';
+  const meta = getDepartureMeta(dep);
+  const timeNote = dep.canceled
+    ? 'odwołany'
+    : (dep.scheduledTime && dep.scheduledTime !== dep.time ? `planowo ${dep.scheduledTime}` : '');
+
+  return `
+    <article class="bus-row${cancelled}">
+      <div class="bus-line">${escapeHtml(dep.line)}</div>
+      <div class="bus-main">
+        <div class="bus-direction">${escapeHtml(direction)}</div>
+        <div class="bus-meta">${escapeHtml(meta)}</div>
+      </div>
+      <div class="bus-time">
+        ${escapeHtml(dep.time)}
+        ${timeNote ? `<small>${escapeHtml(timeNote)}</small>` : ''}
+      </div>
+    </article>
+  `;
+}
+
+function renderBusStop(stop, limit) {
+  const departures = Array.isArray(stop.departures) ? stop.departures : [];
+  const visible = BUS_SHOW_ALL ? departures : departures.slice(0, limit);
+  const platform = stop.platform ? ` · stanowisko ${stop.platform}` : '';
+
+  return `
+    <section class="bus-stop">
+      <div class="bus-stop-head">
+        <div class="bus-stop-title">
+          <strong>${escapeHtml(stop.label || 'Przystanek')}</strong>
+          <span>${escapeHtml(stop.stationName || 'Pszczyna ul. Szymanowskiego')}${escapeHtml(platform)}</span>
+        </div>
+        <span class="bus-updated">${departures.length} odj.</span>
+      </div>
+
+      <div class="bus-list">
+        ${visible.length
+          ? visible.map(renderDepartureRow).join('')
+          : `<div class="quick-empty" style="padding:14px;">Brak najbliższych odjazdów.</div>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderBuses() {
+  if (!quickContent) return;
+
+  if (!DEPARTURES_DATA?.stops?.length) {
+    quickContent.innerHTML = `
+      <div class="quick-empty">
+        Nie udało się wczytać odjazdów. Po pierwszym poprawnym wczytaniu aplikacja pokaże tu ostatnio zapisane dane offline.
+      </div>
+    `;
+    return;
+  }
+
+  const limit = getDepartureLimit();
+  const stops = DEPARTURES_DATA.stops;
+  const stopIndex = clamp(ACTIVE_BUS_STOP, 0, stops.length - 1);
+  const activeStop = stops[stopIndex];
+  const departures = activeStop?.departures || [];
+  const hasMore = departures.length > limit;
+  const updatedAt = formatDataTime(DEPARTURES_DATA.updatedAt);
+
+  renderBusStopTabs(stops, stopIndex);
+
+  quickContent.innerHTML = `
+    <div class="bus-widget">
+      ${DEPARTURES_OFFLINE ? `
+        <div class="bus-offline-note">
+          Tryb offline — pokazuję ostatnio zapisane odjazdy. Godziny mogą być już nieaktualne.
+        </div>
+      ` : ''}
+
+      ${renderBusStop(activeStop, limit)}
+
+      ${updatedAt ? `<div class="quick-note">Aktualizacja danych: ${escapeHtml(updatedAt)}</div>` : ''}
+
+      ${hasMore ? `
+        <div class="bus-more-wrap">
+          <button id="busMoreToggle" class="bus-more-button" type="button">
+            ${BUS_SHOW_ALL ? 'Pokaż mniej' : 'Pokaż więcej'}
+          </button>
+        </div>
+      ` : ''}
+    </div>
+  `;
+
+  const toggle = document.getElementById('busMoreToggle');
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      BUS_SHOW_ALL = !BUS_SHOW_ALL;
+      renderBuses();
+    });
+  }
+}
+
+function renderTeachersQuickInfo() {
+  if (!quickContent) return;
+
+  quickContent.innerHTML = `
+    <div class="quick-note">
+      Tu można później dodać szybkie informacje dla nauczycieli, np. dyżury, link do dziennika, sale lub ważne komunikaty.
+    </div>
+  `;
+}
+
+function renderBusStopTabs(stops = [], activeIndex = ACTIVE_BUS_STOP) {
+  document.querySelectorAll('[data-bus-stop]').forEach((btn, index) => {
+    const stopIndex = Number(btn.dataset.busStop || index);
+    const stop = stops[stopIndex];
+    const isActive = stopIndex === activeIndex;
+
+    btn.hidden = !stop;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+}
+
+function renderQuickPanel() {
+  if (quickPanelMode) quickPanelMode.value = ACTIVE_QUICK_MODE;
+
+  const stopTabs = document.querySelector('.quick-tabs');
+  if (stopTabs) stopTabs.hidden = ACTIVE_QUICK_MODE !== 'buses';
+
+  if (ACTIVE_QUICK_MODE === 'teachers') {
+    renderTeachersQuickInfo();
+    return;
+  }
+
+  renderBuses();
+}
+
+function bindQuickControls() {
+  if (quickPanelMode) {
+    quickPanelMode.addEventListener('change', () => {
+      ACTIVE_QUICK_MODE = quickPanelMode.value || 'buses';
+      BUS_SHOW_ALL = false;
+      renderQuickPanel();
+    });
+  }
+
+  document.querySelectorAll('[data-bus-stop]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      ACTIVE_BUS_STOP = Number(btn.dataset.busStop || 0);
+      BUS_SHOW_ALL = false;
+      renderQuickPanel();
+    });
+  });
+}
+
+async function loadDepartures({ silent = false } = {}) {
+  if (!quickContent) return;
+
+  if (!silent && quickContent) {
+    quickContent.innerHTML = '<div class="quick-loading">Ładowanie aktualnych odjazdów...</div>';
+  }
+
+  try {
+    const res = await fetch(DEPARTURES_BACKEND_URL, {
+      cache: 'no-store'
+    });
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+
+    DEPARTURES_DATA = data;
+    DEPARTURES_OFFLINE = false;
+    saveDeparturesCache(data);
+    renderQuickPanel();
+  } catch (err) {
+    console.error('Błąd odjazdów:', err);
+
+    const cached = loadDeparturesCache();
+
+    if (cached?.data) {
+      DEPARTURES_DATA = cached.data;
+      DEPARTURES_OFFLINE = true;
+      renderQuickPanel();
+      return;
+    }
+
+    renderBuses();
+  }
 }
 
 /* =========================
@@ -242,6 +500,7 @@ function buildTeacherGroupsFromGeneral(general) {
     if (!currentGroup) return;
 
     const looksLikeLesson =
+      (/lek\.?/i.test(raw) && extractClassesFromText(raw).length) ||
       /lek\.?\s*\d/i.test(raw) ||
       /^lek\s*\d/i.test(raw) ||
       /\bzwolnienie\b/i.test(raw) ||
@@ -496,14 +755,14 @@ function bindSubEntriesToggle() {
 }
 
 function formatLessonRange(lessons) {
-  if (!Array.isArray(lessons) || !lessons.length) return 'bez lekcji';
+  if (!Array.isArray(lessons) || !lessons.length) return 'nieznana lekcja';
 
   const sorted = [...new Set(lessons)]
     .map(Number)
     .filter(n => !Number.isNaN(n))
     .sort((a, b) => a - b);
 
-  if (!sorted.length) return 'bez lekcji';
+  if (!sorted.length) return 'nieznana lekcja';
 
   const ranges = [];
   let start = sorted[0];
@@ -1167,6 +1426,9 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSubstitutions();
   loadNews();
   loadClasses();
+  bindQuickControls();
+  loadDepartures();
+  setInterval(() => loadDepartures({ silent: true }), 45000);
   onScroll();
 
   if (classSearch) {

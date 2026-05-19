@@ -52,7 +52,7 @@
           <div class="hero-meta">
             <div class="meta-card">
               <strong>01</strong>
-              <span>Duże kafelki zamiast brzydkich linków</span>
+              <span>Duże kafelki, zamiast anachronistycznych linków.</span>
             </div>
             <div class="meta-card">
               <strong>02</strong>
@@ -156,49 +156,48 @@
           </div>
         
         </div>
-        <div class="panel">
-          <div class="panel-header">
+        <div class="panel quick-panel" id="quickPanel">
+          <div class="panel-header quick-panel-header">
             <h3>Krótki skrót</h3>
-            <span>miejsce na szybkie info</span>
+            <select id="quickPanelMode" class="quick-panel-select" aria-label="Wybierz szybki panel">
+              <option value="buses">Busy</option>
+              <option value="teachers">Dla nauczycieli</option>
+            </select>
           </div>
-          <div style="padding:20px; color: var(--muted); line-height: 1.75;">
-            <p style="margin-top:0;">
-              W tym miejscu można dodać: dyżury, komunikaty, rekrutację albo mini-kafle do najważniejszych akcji.
-            </p>
-            <p style="margin-bottom:0;">
-              tego typu benc
-            </p>
+
+          <div class="quick-tabs" role="tablist" aria-label="Wybór przystanku">
+            <button class="quick-tab active" type="button" data-bus-stop="0" role="tab" aria-selected="true">
+              Przystanek 1
+            </button>
+            <button class="quick-tab" type="button" data-bus-stop="1" role="tab" aria-selected="false">
+              Przystanek 2
+            </button>
+          </div>
+
+          <div id="quickContent" class="quick-content">
+            <div class="quick-loading">Ładowanie aktualnych odjazdów...</div>
           </div>
         </div>
       </div>
     </section>
 	<section class="section" id="zastepstwa">
-	  <div class="section-head">
+	  <div class="section-head sub-section-head">
 		<div>
 		  <h2>Zastępstwa</h2>
 		  <p>Własny, czytelny widok zastępstw z podświetleniem Twojej klasy.</p>
 		</div>
+		<span id="subDate" class="sub-date"></span>
 	  </div>
-		<div class="panel-header">
+		<div class="panel-header sub-summary-header">
 		  <h3 id="aiSummary">Ładowanie podsumowania...</h3>
-		  <span id="subStatus">Ładowanie zastępstw...</span>
-		</div>
-
-		<div style="padding: 0 20px 10px;">
-		  <div id="subDate" style="color: var(--muted); font-size: .92rem;"></div>
-		</div>
-		<div class="sub-toolbar">
-		  <div class="sub-pill">
-			Twoja klasa: <strong id="subMyClass">—</strong>
-		  </div>
-		  <div class="sub-pill" id="subCount">0 wpisów</div>
+		  <span id="subStatus" class="sr-only" aria-live="polite">Ładowanie zastępstw...</span>
 		</div>
 
 		<div id="substitutionsList" class="substitutions-list"></div>
 
 		<div style="padding: 0 20px 20px;">
 		  <button id="subToggle" class="btn btn-secondary" type="button">
-			Pokaż więcej
+			Dodaj inne klasy
 		  </button>
 		</div>
 	  </div>
