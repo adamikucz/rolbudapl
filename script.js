@@ -1193,9 +1193,30 @@ document.addEventListener('DOMContentLoaded', () => {
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', async () => {
     try {
-      await navigator.serviceWorker.register('/sw.js');
-
+      const reg = await navigator.serviceWorker.register('/sw.js');
       console.log('Service Worker działa 🚀');
+
+      reg.addEventListener('updatefound', () => {
+        const newWorker = reg.installing;
+        if (!newWorker) return;
+
+        newWorker.addEventListener('statechange', () => {
+          if (
+            newWorker.state === 'installed' &&
+            navigator.serviceWorker.controller &&
+            !sessionStorage.getItem('sw-reloaded')
+          ) {
+            console.log('Wykryto nowe pliki aplikacji! Automatyczne odświeżenie...');
+            sessionStorage.setItem('sw-reloaded', 'true');
+            window.location.reload();
+          }
+        });
+      });
+
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        sessionStorage.removeItem('sw-reloaded');
+      });
+
     } catch (err) {
       console.error('SW error:', err);
     }

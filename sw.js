@@ -1,4 +1,4 @@
-const CACHE_NAME = "pzs2-cache-v1";
+const CACHE_NAME = "pzs2-cache-v2";
 
 const STATIC_ASSETS = [
   "/",
@@ -6,6 +6,7 @@ const STATIC_ASSETS = [
   "/style.css",
   "/script.js",
   "/manifest.json",
+  "/sitemap.xml",
   "/assets/favicon.png",
   "/assets/logo-rolbudy.png",
   "/assets/school-placeholder.jpg"
