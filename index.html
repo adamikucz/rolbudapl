@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rolbuda - nieformalna storna szkolna</title>
+  <meta name="description" content="Nowoczesna strona Powiatowego Zespołu Szkół nr 2 im. Karola Miarki w Pszczynie." />
+  <link rel="stylesheet" href="style.css" />
+  <script src="script.js" defer></script>
+  <link rel="icon" type="image/x-icon" href="assets/favicon.png">
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#start" aria-label="Powrót na górę strony">
+        <img src="assets/logo-rolbudy.png" alt="Logo Rolbudy" class="brand-mark">
+        <div class="brand-text">
+          <strong>Rolbuda - PZS 2 Pszczyna</strong>
+          <span>Nowa, fanowska wersja szkolnej strony.</span>
+        </div>
+      </a>
+
+      <button id="themeToggle" class="theme-toggle" type="button" aria-label="Zmień motyw">
+        <span class="theme-toggle-icon">🌙</span>
+      </button>
+
+      <nav class="nav" aria-label="Nawigacja">
+        <a href="#najwazniejsze">Najważniejsze</a>
+        <a href="#aktualnosci">Aktualności</a>
+        <a href="#zastepstwa">Zastępstwa</a>
+        <a href="#kontakt">Kontakt</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="start">
+    <section class="hero">
+      <div class="hero-bg"></div>
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <h1>Strona szkolna PZS2 Rolbuda.</h1>
+          <p>
+            Fanowska strona rolbudy zainicjowana przez ziutków z 3Ti
+          </p>
+
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#najwazniejsze">Wejdź do najważniejszych</a>
+            <a class="btn btn-secondary" href="#zastepstwa">Podgląd zastępstw</a>
+          </div>
+
+          <div class="hero-meta">
+            <div class="meta-card">
+              <strong>01</strong>
+              <span>Duże kafelki zamiast brzydkich linków</span>
+            </div>
+            <div class="meta-card">
+              <strong>02</strong>
+              <span>Stronę możesz pobrać jako aplikację (PWA), dodaj do ekranu głównego.</span>
+            </div>
+            <div class="meta-card">
+              <strong>03</strong>
+              <span>Strona i aplikacja może działać offline, ale bez aktualizacji zastępstw.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-visual" aria-hidden="true">
+          <div class="visual-shell">
+            <div class="hero-image" id="heroImage"></div>
+            <div class="art-overlay"></div>
+            <div class="floating-badge">
+              <strong>Rolbudu...</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="najwazniejsze">
+      <div class="section-head">
+        <div>
+          <h2>Najważniejsze dla uczniów</h2>
+          <p>Tu powinny być rzeczy najczęściej używane. Zamiast małych linków po prawej — normalna, wygodna ścieżka.</p>
+        </div>
+      </div>
+
+      <div class="cards">
+        <a class="card" href="#zastepstwa">
+          <div class="icon">🗓️</div>
+          <h3>Zastępstwa</h3>
+          <p>Szybki podgląd dzisiejszych zmian bez pobierania PDF-a.</p>
+        </a>
+        <a class="card" href="#plan">
+          <div class="icon">📘</div>
+          <h3>Plan lekcji</h3>
+          <p>W tym samym stylu: prosto, czytelnie i bez klikania w mikrolinki.</p>
+        </a>
+        <a class="card" href="#aktualnosci">
+          <div class="icon">✨</div>
+          <h3>Ogłoszenia</h3>
+          <p>Najważniejsze komunikaty na górze, bez konieczności przewijania przez stare moduły.</p>
+        </a>
+        <a class="card" href="#kontakt">
+          <div class="icon">☎️</div>
+          <h3>Kontakt</h3>
+          <p>Najpotrzebniejsze dane szkoły w jednym miejscu, bez szukania w menu po lewej.</p>
+        </a>
+      </div>
+    </section>
+
+    <section class="section" id="aktualnosci">
+      <div class="section-head">
+        <div>
+          <h2>Aktualności</h2>
+          <p>Tu znajdują się nowości szkolne oraz tego typu pierdółki.</p>
+        </div>
+      </div>
+
+      <div class="split">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Co nowego, w tej rolbudzie?</h3>
+          </div>
+          <div class="announcement-list">
+            <article class="announcement">
+              <div class="date-pill">04<br/>2026</div>
+              <div>
+                <strong>Nowa strona szkoły w budowie</strong>
+                <p>Pozdro z 3Ti!</p>
+              </div>
+              <div class="chip">ważne</div>
+            </article>
+            <article class="announcement">
+              <div class="date-pill">04<br/>2026</div>
+              <div>
+                <strong>Zastępstwa i plan lekcji w jednym, prostym miejscu</strong>
+                <p>Docelowo uczniowie nie będą musieli szukać PDF-ów ani przeklikiwać się przez stary interfejs, ez.</p>
+              </div>
+              <div class="chip">uczniowie</div>
+            </article>
+            <article class="announcement">
+              <div class="date-pill">04<br/>2026</div>
+              <div>
+                <strong>Wersja mobilna ma być równie dobra</strong>
+                <p>Układ od początku jest responsywny, więc mobilnie nie będzie wyglądało jak miniatura starej strony.</p>
+              </div>
+              <div class="chip">mobile</div>
+            </article>
+          </div>
+
+          <div class="announcements-actions">
+            <button id="newsToggle" class="btn btn-secondary" type="button">
+              Pokaż więcej
+            </button>
+          </div>
+        
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Krótki skrót</h3>
+            <span>miejsce na szybkie info</span>
+          </div>
+          <div style="padding:20px; color: var(--muted); line-height: 1.75;">
+            <p style="margin-top:0;">
+              W tym miejscu można dodać: dyżury, komunikaty, rekrutację albo mini-kafle do najważniejszych akcji.
+            </p>
+            <p style="margin-bottom:0;">
+              tego typu benc
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+	<section class="section" id="zastepstwa">
+	  <div class="section-head">
+		<div>
+		  <h2>Zastępstwa</h2>
+		  <p>Własny, czytelny widok zastępstw z podświetleniem Twojej klasy.</p>
+		</div>
+	  </div>
+		<div class="panel-header">
+		  <h3 id="aiSummary">Ładowanie podsumowania...</h3>
+		  <span id="subStatus">Ładowanie zastępstw...</span>
+		</div>
+
+		<div style="padding: 0 20px 10px;">
+		  <div id="subDate" style="color: var(--muted); font-size: .92rem;"></div>
+		</div>
+		<div class="sub-toolbar">
+		  <div class="sub-pill">
+			Twoja klasa: <strong id="subMyClass">—</strong>
+		  </div>
+		  <div class="sub-pill" id="subCount">0 wpisów</div>
+		</div>
+
+		<div id="substitutionsList" class="substitutions-list"></div>
+
+		<div style="padding: 0 20px 20px;">
+		  <button id="subToggle" class="btn btn-secondary" type="button">
+			Pokaż więcej
+		  </button>
+		</div>
+	  </div>
+	</section>
+	<section class="section" id="plan">
+	  <div class="section-head">
+		<div>
+		  <h2>Plan lekcji</h2>
+		  <p>Wybierz klasę, a plan wczyta się w nowym, czytelnym widoku.</p>
+		</div>
+	  </div>
+	
+	  <div class="panel">
+		<div class="panel-header">
+		  <h3>Wyszukaj klasę</h3>
+		  <span id="planStatus">Gotowe</span>
+		</div>
+
+		<div style="padding: 18px 20px; display:grid; gap:14px;">
+		  <input
+			id="classSearch"
+			type="search"
+			placeholder="Szukaj klasy..."
+			style="width:100%; padding:14px 16px; border-radius:16px; border:1px solid rgba(16,32,51,.12); background:#fff;"
+		  />
+
+		  <div id="classList" class="class-list"></div>
+		</div>
+
+		<div id="planPreview" style="padding: 0 20px 20px;"></div>
+	  </div>
+	</section>
+
+    <section class="section" id="kontakt">
+      <div class="section-head">
+        <div>
+          <h2>Kontakt</h2>
+          <p>Tutaj znajdują się informacje kontaktowe z oficjalnego źródła.</p>
+        </div>
+      </div>
+
+      <div class="cards contact-cards">
+        <div class="card">
+          <div class="icon">📍</div>
+          <h3>Adres</h3>
+          <p>Szymanowskiego 12, 43-200 Pszczyna.</p>
+        </div>
+        <div class="card">
+          <div class="icon">✉️</div>
+          <h3>E-mail</h3>
+          <p>Numer telefonu: +48 322103463</p>
+        </div>
+        <div class="card">
+          <div class="icon">🕒</div>
+          <h3>Godziny</h3>
+          <p>07:00–15:00</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <div>© 2026 PZS 2 Pszczyna · strona dla uczniów</div>
+      <div>Fanowski projekt dwóch delikwentów z 3Ti.</div>
+    </div>
+  </footer>
+  <div id="classModal" class="modal hidden">
+  <div class="modal-box">
+    <h2>Wybierz swoją klasę</h2>
+    <p>To ustawienie wyświetla się tylko raz.</p>
+
+    <select id="modalClassSelect"></select>
+
+    <div class="modal-actions">
+      <button id="modalConfirm" class="btn btn-primary">Zapisz</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>
