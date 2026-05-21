@@ -1702,3 +1702,24 @@ body.dark-theme .sub-date {
   border-color: rgba(234,241,255,.10);
   color: var(--text);
 }
+
+
+/* Doprecyzowany widok pozycji zastępstw: klasa · lekcja · nauczyciel zastępowany */
+.sub-mini-title {
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.sub-mini-head .sub-type {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  .sub-mini-head {
+    align-items: flex-start;
+  }
+
+  .sub-mini-title {
+    flex: 1 1 180px;
+  }
+}
