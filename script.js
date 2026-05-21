@@ -46,8 +46,12 @@ let CLASSES = [];
 let lastScroll = 0;
 
 const DEPARTURES_CACHE_KEY = 'pzs2_departures_cache';
+const DEPARTURES_REFRESH_INTERVAL = 60000;
+const DEPARTURES_MAX_CACHE_AGE = 1000 * 60 * 60 * 8;
 let DEPARTURES_DATA = null;
 let DEPARTURES_OFFLINE = false;
+let DEPARTURES_STALE = false;
+let DEPARTURES_REFRESH_TIMER = null;
 let BUS_SHOW_ALL = false;
 let ACTIVE_QUICK_MODE = 'buses';
 let ACTIVE_BUS_STOP = 0;
@@ -149,10 +153,31 @@ function saveDeparturesCache(data) {
 function loadDeparturesCache() {
   try {
     const cached = JSON.parse(localStorage.getItem(DEPARTURES_CACHE_KEY) || 'null');
-    return cached?.data ? cached : null;
+
+    if (!cached?.data) return null;
+
+    const savedAt = Number(cached.savedAt || 0);
+    const updatedAt = Number(cached.data?.updatedAt || 0) * 1000;
+    const referenceTime = updatedAt || savedAt;
+
+    return {
+      ...cached,
+      stale: !referenceTime || !isSameLocalDay(referenceTime, Date.now()) || Date.now() - savedAt > DEPARTURES_MAX_CACHE_AGE
+    };
   } catch {
     return null;
   }
+}
+
+function isSameLocalDay(a, b) {
+  const first = new Date(a);
+  const second = new Date(b);
+
+  return (
+    first.getFullYear() === second.getFullYear() &&
+    first.getMonth() === second.getMonth() &&
+    first.getDate() === second.getDate()
+  );
 }
 
 function formatDataTime(timestamp) {
@@ -162,10 +187,19 @@ function formatDataTime(timestamp) {
 
   if (Number.isNaN(date.getTime())) return '';
 
-  return date.toLocaleTimeString('pl-PL', {
+  const time = date.toLocaleTimeString('pl-PL', {
     hour: '2-digit',
     minute: '2-digit'
   });
+
+  if (isSameLocalDay(date.getTime(), Date.now())) return time;
+
+  const day = date.toLocaleDateString('pl-PL', {
+    day: '2-digit',
+    month: '2-digit'
+  });
+
+  return `${day}, ${time}`;
 }
 
 function getDepartureMeta(dep) {
@@ -254,7 +288,10 @@ function renderBuses() {
     <div class="bus-widget">
       ${DEPARTURES_OFFLINE ? `
         <div class="bus-offline-note">
-          Tryb offline — pokazuję ostatnio zapisane odjazdy. Godziny mogą być już nieaktualne.
+          ${DEPARTURES_STALE
+            ? 'Tryb offline — zapisane odjazdy są z innego dnia albo są stare. Sprawdź połączenie przed wyjściem.'
+            : 'Tryb offline — pokazuję ostatnio zapisane odjazdy. Godziny mogą być już nieaktualne.'
+          }
         </div>
       ` : ''}
 
@@ -343,8 +380,12 @@ async function loadDepartures({ silent = false } = {}) {
   }
 
   try {
-    const res = await fetch(DEPARTURES_BACKEND_URL, {
-      cache: 'no-store'
+    const url = `${DEPARTURES_BACKEND_URL}?_=${Date.now()}`;
+    const res = await fetch(url, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache'
+      }
     });
 
     if (!res.ok) {
@@ -355,6 +396,7 @@ async function loadDepartures({ silent = false } = {}) {
 
     DEPARTURES_DATA = data;
     DEPARTURES_OFFLINE = false;
+    DEPARTURES_STALE = false;
     saveDeparturesCache(data);
     renderQuickPanel();
   } catch (err) {
@@ -365,12 +407,36 @@ async function loadDepartures({ silent = false } = {}) {
     if (cached?.data) {
       DEPARTURES_DATA = cached.data;
       DEPARTURES_OFFLINE = true;
+      DEPARTURES_STALE = Boolean(cached.stale);
       renderQuickPanel();
       return;
     }
 
     renderBuses();
   }
+}
+
+
+function setupDeparturesAutoRefresh() {
+  if (DEPARTURES_REFRESH_TIMER) {
+    clearInterval(DEPARTURES_REFRESH_TIMER);
+  }
+
+  DEPARTURES_REFRESH_TIMER = setInterval(() => {
+    if (document.visibilityState === 'visible') {
+      loadDepartures({ silent: true });
+    }
+  }, DEPARTURES_REFRESH_INTERVAL);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      loadDepartures({ silent: true });
+    }
+  });
+
+  window.addEventListener('focus', () => {
+    loadDepartures({ silent: true });
+  });
 }
 
 /* =========================
@@ -754,6 +820,88 @@ function bindSubEntriesToggle() {
   });
 }
 
+
+function getFirstLesson(entry) {
+  const lessons = Array.isArray(entry?.lessons) ? entry.lessons : [];
+  const nums = lessons
+    .map(Number)
+    .filter(n => !Number.isNaN(n))
+    .sort((a, b) => a - b);
+
+  return nums.length ? nums[0] : 999;
+}
+
+function sortSubEntries(entries) {
+  return [...entries].sort((a, b) => {
+    const classA = String(a?.className || a?.classes?.[0] || '');
+    const classB = String(b?.className || b?.classes?.[0] || '');
+    const byClass = sortClassNames(classA, classB);
+
+    if (byClass !== 0) return byClass;
+
+    const byLesson = getFirstLesson(a) - getFirstLesson(b);
+    if (byLesson !== 0) return byLesson;
+
+    return String(a?.teacher || '').localeCompare(String(b?.teacher || ''), 'pl');
+  });
+}
+
+function getEntryClassName(entry) {
+  return String(entry?.className || entry?.classes?.[0] || '—').replace(/\s+/g, '');
+}
+
+function cleanTeacherName(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+,/g, ',')
+    .replace(/[*]+\s*$/g, '')
+    .trim();
+}
+
+function getReplacementTeacher(entry) {
+  const raw = String(entry?.raw || entry?.summary || '');
+  const withoutPrefix = raw
+    .replace(/^\s*[1-5]\s*(?:LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\s*/iu, '')
+    .replace(/^\s*(?:lek|le)\.\s*\d+(?:\s*[-,i]\s*\d+)*\s*/iu, '')
+    .replace(/^\s*(?:lek|le)\.\s*z\s*\d{1,2}-\d{1,2}\s*l\.\s*\d+\s*/iu, '')
+    .trim();
+
+  if (!withoutPrefix || /zwolnion[ay]/iu.test(withoutPrefix)) return '';
+
+  return cleanTeacherName(withoutPrefix);
+}
+
+function formatSubEntryTitle(entry) {
+  const className = getEntryClassName(entry);
+  const lesson = formatLessonRange(entry?.lessons);
+  const replacedTeacher = cleanTeacherName(entry?.teacher);
+
+  return [className, lesson, replacedTeacher]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function formatSubEntryDescription(entry) {
+  const className = getEntryClassName(entry);
+  const lesson = formatLessonRange(entry?.lessons);
+  const raw = String(entry?.raw || entry?.summary || '').trim();
+  const replacementTeacher = getReplacementTeacher(entry);
+
+  if (entry?.type === 'cancelled') {
+    return `${className} ${lesson} zwolniona`;
+  }
+
+  if (entry?.type === 'substitution' && replacementTeacher) {
+    return `${className} ${lesson} zastępstwo z ${replacementTeacher}`;
+  }
+
+  if (entry?.type === 'moved') {
+    return raw || `${className} ${lesson} przeniesione`;
+  }
+
+  return raw || `${className} ${lesson}`;
+}
+
 function formatLessonRange(lessons) {
   if (!Array.isArray(lessons) || !lessons.length) return 'nieznana lekcja';
 
@@ -815,7 +963,7 @@ function buildSummary(data, saved) {
 
   const availableClasses = getClassesWithSubstitutions(data);
   const selectedClasses = getSelectedSubClasses(saved, availableClasses);
-  const entries = collectEntriesForSelectedClasses(data, selectedClasses);
+  const entries = sortSubEntries(collectEntriesForSelectedClasses(data, selectedClasses));
 
   const teacherGroups = getTeacherGroups(data);
   const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
@@ -900,12 +1048,11 @@ function renderPersonalCard(entries, saved, selectedClasses = []) {
               <div class="sub-mini-item ${item.type === 'cancelled' ? 'sub-card--cancelled' : ''} ${item.type === 'moved' ? 'sub-card--moved' : ''} ${item.type === 'substitution' ? 'sub-card--substitution' : ''}">
                 <div class="sub-mini-head">
                   <div class="sub-mini-title">
-                    ${escapeHtml(item.className || (item.classes && item.classes[0]) || '—')}
-                    · ${escapeHtml(formatLessonRange(item.lessons))}
+                    ${escapeHtml(formatSubEntryTitle(item))}
                   </div>
                   <div class="sub-type ${typeClass(item.type)}">${typeLabel(item.type)}</div>
                 </div>
-                <div class="sub-line">${escapeHtml(item.summary || item.raw || '')}</div>
+                <div class="sub-line">${escapeHtml(formatSubEntryDescription(item))}</div>
               </div>
             `).join('')
           : `<div class="sub-empty">Brak szczegółów dla wybranych klas.</div>`
@@ -934,7 +1081,7 @@ function renderSubstitutions(data) {
 
   const availableClasses = getClassesWithSubstitutions(data);
   const selectedClasses = getSelectedSubClasses(saved, availableClasses);
-  const selectedEntries = collectEntriesForSelectedClasses(data, selectedClasses);
+  const selectedEntries = sortSubEntries(collectEntriesForSelectedClasses(data, selectedClasses));
 
   const teacherGroups = getTeacherGroups(data);
   const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
@@ -1427,8 +1574,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadNews();
   loadClasses();
   bindQuickControls();
+  setupDeparturesAutoRefresh();
   loadDepartures();
-  setInterval(() => loadDepartures({ silent: true }), 45000);
   onScroll();
 
   if (classSearch) {
@@ -1453,32 +1600,70 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 if ('serviceWorker' in navigator) {
+  let swReloading = false;
+
+  function reloadAfterServiceWorkerUpdate() {
+    const lastReload = Number(sessionStorage.getItem('sw-update-reload-at') || 0);
+
+    if (swReloading || Date.now() - lastReload < 5000) return;
+
+    swReloading = true;
+    sessionStorage.setItem('sw-update-reload-at', String(Date.now()));
+    window.location.reload();
+  }
+
+  function askWaitingWorkerToActivate(registration) {
+    if (registration.waiting) {
+      registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+    }
+  }
+
   window.addEventListener('load', async () => {
     try {
-      const reg = await navigator.serviceWorker.register('/sw.js');
+      const reg = await navigator.serviceWorker.register('/sw.js', {
+        updateViaCache: 'none'
+      });
+
       console.log('Service Worker działa 🚀');
+
+      askWaitingWorkerToActivate(reg);
+      reg.update().catch(() => {});
 
       reg.addEventListener('updatefound', () => {
         const newWorker = reg.installing;
         if (!newWorker) return;
 
         newWorker.addEventListener('statechange', () => {
-          if (
-            newWorker.state === 'installed' &&
-            navigator.serviceWorker.controller &&
-            !sessionStorage.getItem('sw-reloaded')
-          ) {
-            console.log('Wykryto nowe pliki aplikacji! Automatyczne odświeżenie...');
-            sessionStorage.setItem('sw-reloaded', 'true');
-            window.location.reload();
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            newWorker.postMessage({ type: 'SKIP_WAITING' });
           }
         });
       });
 
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        sessionStorage.removeItem('sw-reloaded');
+      let lastUpdateCheck = 0;
+      const checkForServiceWorkerUpdate = () => {
+        if (Date.now() - lastUpdateCheck < 60000) return;
+        lastUpdateCheck = Date.now();
+        reg.update().catch(() => {});
+      };
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          checkForServiceWorkerUpdate();
+        }
       });
 
+      window.addEventListener('focus', checkForServiceWorkerUpdate);
+
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data?.type === 'APP_UPDATED') {
+          reloadAfterServiceWorkerUpdate();
+        }
+      });
+
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        reloadAfterServiceWorkerUpdate();
+      });
     } catch (err) {
       console.error('SW error:', err);
     }
