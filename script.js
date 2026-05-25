@@ -51,6 +51,7 @@ const DEPARTURES_MAX_CACHE_AGE = 1000 * 60 * 60 * 8;
 let DEPARTURES_DATA = null;
 let DEPARTURES_OFFLINE = false;
 let DEPARTURES_STALE = false;
+let DEPARTURES_WARNING = '';
 let DEPARTURES_REFRESH_TIMER = null;
 let BUS_SHOW_ALL = false;
 let ACTIVE_QUICK_MODE = 'buses';
@@ -141,9 +142,13 @@ function getDepartureLimit() {
 
 function saveDeparturesCache(data) {
   try {
+    const now = Date.now();
     localStorage.setItem(DEPARTURES_CACHE_KEY, JSON.stringify({
-      savedAt: Date.now(),
-      data
+      savedAt: now,
+      data: {
+        ...data,
+        fetchedAt: data?.fetchedAt || now
+      }
     }));
   } catch {
     // localStorage może być pełny albo niedostępny — wtedy po prostu nie zapisujemy fallbacku.
@@ -157,12 +162,11 @@ function loadDeparturesCache() {
     if (!cached?.data) return null;
 
     const savedAt = Number(cached.savedAt || 0);
-    const updatedAt = Number(cached.data?.updatedAt || 0) * 1000;
-    const referenceTime = updatedAt || savedAt;
+    const fetchedAt = Number(cached.data?.fetchedAt || savedAt || 0);
 
     return {
       ...cached,
-      stale: !referenceTime || !isSameLocalDay(referenceTime, Date.now()) || Date.now() - savedAt > DEPARTURES_MAX_CACHE_AGE
+      stale: !fetchedAt || !isSameLocalDay(fetchedAt, Date.now()) || Date.now() - fetchedAt > DEPARTURES_MAX_CACHE_AGE
     };
   } catch {
     return null;
@@ -180,10 +184,12 @@ function isSameLocalDay(a, b) {
   );
 }
 
-function formatDataTime(timestamp) {
-  if (!timestamp) return '';
+function formatDataTime(value) {
+  if (!value) return '';
 
-  const date = new Date(Number(timestamp) * 1000);
+  const raw = Number(value);
+  const millis = raw < 10000000000 ? raw * 1000 : raw;
+  const date = new Date(millis);
 
   if (Number.isNaN(date.getTime())) return '';
 
@@ -280,24 +286,21 @@ function renderBuses() {
   const activeStop = stops[stopIndex];
   const departures = activeStop?.departures || [];
   const hasMore = departures.length > limit;
-  const updatedAt = formatDataTime(DEPARTURES_DATA.updatedAt);
+  const updatedAt = formatDataTime(DEPARTURES_DATA.fetchedAt);
 
   renderBusStopTabs(stops, stopIndex);
 
   quickContent.innerHTML = `
     <div class="bus-widget">
-      ${DEPARTURES_OFFLINE ? `
+      ${DEPARTURES_WARNING ? `
         <div class="bus-offline-note">
-          ${DEPARTURES_STALE
-            ? 'Tryb offline — zapisane odjazdy są z innego dnia albo są stare. Sprawdź połączenie przed wyjściem.'
-            : 'Tryb offline — pokazuję ostatnio zapisane odjazdy. Godziny mogą być już nieaktualne.'
-          }
+          ${escapeHtml(DEPARTURES_WARNING)}
         </div>
       ` : ''}
 
       ${renderBusStop(activeStop, limit)}
 
-      ${updatedAt ? `<div class="quick-note">Aktualizacja danych: ${escapeHtml(updatedAt)}</div>` : ''}
+      ${updatedAt ? `<div class="quick-note">Pobrano odjazdy: ${escapeHtml(updatedAt)}</div>` : ''}
 
       ${hasMore ? `
         <div class="bus-more-wrap">
@@ -382,10 +385,7 @@ async function loadDepartures({ silent = false } = {}) {
   try {
     const url = `${DEPARTURES_BACKEND_URL}?_=${Date.now()}`;
     const res = await fetch(url, {
-      cache: 'no-store',
-      headers: {
-        'Cache-Control': 'no-cache'
-      }
+      cache: 'no-store'
     });
 
     if (!res.ok) {
@@ -393,11 +393,16 @@ async function loadDepartures({ silent = false } = {}) {
     }
 
     const data = await res.json();
+    const normalizedData = {
+      ...data,
+      fetchedAt: Date.now()
+    };
 
-    DEPARTURES_DATA = data;
+    DEPARTURES_DATA = normalizedData;
     DEPARTURES_OFFLINE = false;
     DEPARTURES_STALE = false;
-    saveDeparturesCache(data);
+    DEPARTURES_WARNING = '';
+    saveDeparturesCache(normalizedData);
     renderQuickPanel();
   } catch (err) {
     console.error('Błąd odjazdów:', err);
@@ -408,6 +413,11 @@ async function loadDepartures({ silent = false } = {}) {
       DEPARTURES_DATA = cached.data;
       DEPARTURES_OFFLINE = true;
       DEPARTURES_STALE = Boolean(cached.stale);
+      DEPARTURES_WARNING = navigator.onLine === false
+        ? 'Brak połączenia — pokazuję ostatnio zapisane odjazdy.'
+        : (cached.stale
+          ? 'Nie udało się pobrać aktualnych odjazdów — pokazuję ostatni zapisany wynik.'
+          : 'Chwilowy problem z pobraniem odjazdów — pokazuję ostatni zapisany wynik.');
       renderQuickPanel();
       return;
     }
@@ -521,8 +531,7 @@ function normalizeSubType(entry) {
   if (
     raw.includes('przeniesienie') ||
     raw.includes('przeniesiona') ||
-    raw.includes('przeniesie') ||
-    raw.includes(' z lek')
+    raw.includes('przeniesie')
   ) {
     return 'moved';
   }
@@ -596,6 +605,53 @@ function getTeacherGroups(data) {
 
 function getAllNormalizedEntries(data) {
   return getTeacherGroups(data).flatMap(group => group.entries);
+}
+
+function extractTeacherNamesFromText(text) {
+  const source = String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\blek\.?\s*[\d,\-\si]+\s*-\s*/gi, ' ')
+    .replace(/\bl\.\s*\d+/gi, ' ')
+    .trim();
+
+  const matches = [...source.matchAll(/\b[A-ZĄĆĘŁŃÓŚŹŻ\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?/gu)];
+
+  return [...new Set(matches.map(match => cleanTeacherName(match[0])))] ;
+}
+
+function getAbsentTeachers(data) {
+  if (Array.isArray(data?.absentTeachers) && data.absentTeachers.length) {
+    return [...new Set(data.absentTeachers.map(cleanTeacherName).filter(Boolean))];
+  }
+
+  const general = Array.isArray(data?.general) ? data.general : [];
+  const chunks = [];
+  let collecting = false;
+
+  for (const entry of general) {
+    const raw = String(entry?.raw || entry?.summary || '').trim();
+
+    if (!raw) continue;
+
+    if (/^nauczyciele\s+nieobecni\s*:/i.test(raw)) {
+      collecting = true;
+      chunks.push(raw.replace(/^nauczyciele\s+nieobecni\s*:/i, ''));
+      continue;
+    }
+
+    if (!collecting) continue;
+
+    if (/^(?:praktyki|nauczyciele\s+zaangażowani|[•]|projekt|wycieczka|warsztaty|olimpiada)\b/i.test(raw)) {
+      break;
+    }
+
+    chunks.push(raw);
+  }
+
+  const parsed = extractTeacherNamesFromText(chunks.join(' '));
+  if (parsed.length) return parsed;
+
+  return [...new Set(getTeacherGroups(data).map(g => cleanTeacherName(g.teacher)).filter(Boolean))];
 }
 
 function normalizeDedupText(text) {
@@ -858,17 +914,51 @@ function cleanTeacherName(value) {
     .trim();
 }
 
+function stripEntryPrefix(raw) {
+  return String(raw || '')
+    .replace(/^\s*[1-5]\s*(?:LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\s*/iu, '')
+    .replace(/^\s*(?:lek|le|l)\.?\s*\d+(?:\s*[-,i]\s*\d+)*\s*/iu, '')
+    .trim();
+}
+
+function getSourceLessonNote(entry) {
+  const raw = String(entry?.raw || entry?.summary || '');
+  const lesson = raw.match(/\bz\s*lek\.?\s*([\d,\-\si]+)/iu);
+
+  if (lesson) {
+    return `z lek. ${lesson[1].replace(/\s+/g, ' ').trim()}`;
+  }
+
+  const dateLesson = raw.match(/\blek\.?\s*z\s*(\d{1,2}-\d{2})(?:\s*l\.?\s*(\d+))?/iu);
+
+  if (dateLesson) {
+    return dateLesson[2]
+      ? `lekcja z ${dateLesson[1]}, lek. ${dateLesson[2]}`
+      : `lekcja z ${dateLesson[1]}`;
+  }
+
+  return '';
+}
+
 function getReplacementTeacher(entry) {
   const raw = String(entry?.raw || entry?.summary || '');
-  const withoutPrefix = raw
-    .replace(/^\s*[1-5]\s*(?:LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\s*/iu, '')
-    .replace(/^\s*(?:lek|le)\.\s*\d+(?:\s*[-,i]\s*\d+)*\s*/iu, '')
-    .replace(/^\s*(?:lek|le)\.\s*z\s*\d{1,2}-\d{1,2}\s*l\.\s*\d+\s*/iu, '')
-    .trim();
+  const withoutPrefix = stripEntryPrefix(raw);
 
   if (!withoutPrefix || /zwolnion[ay]/iu.test(withoutPrefix)) return '';
+  if (/^biblioteka$/iu.test(withoutPrefix)) return 'biblioteka';
 
-  return cleanTeacherName(withoutPrefix);
+  const teacherMatch = withoutPrefix.match(/^([A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?)/u);
+
+  if (teacherMatch) {
+    return cleanTeacherName(teacherMatch[1]);
+  }
+
+  return cleanTeacherName(
+    withoutPrefix
+      .replace(/\bz\s*lek\.?\s*[\d,\-\si]+/giu, '')
+      .replace(/\blek\.?\s*z\s*\d{1,2}-\d{2}(?:\s*l\.?\s*\d+)?/giu, '')
+      .trim()
+  );
 }
 
 function formatSubEntryTitle(entry) {
@@ -886,16 +976,25 @@ function formatSubEntryDescription(entry) {
   const lesson = formatLessonRange(entry?.lessons);
   const raw = String(entry?.raw || entry?.summary || '').trim();
   const replacementTeacher = getReplacementTeacher(entry);
+  const sourceLesson = getSourceLessonNote(entry);
 
   if (entry?.type === 'cancelled') {
     return `${className} ${lesson} zwolniona`;
   }
 
+  if (replacementTeacher && replacementTeacher.toLowerCase() === 'biblioteka') {
+    return `${className} ${lesson} biblioteka`;
+  }
+
   if (entry?.type === 'substitution' && replacementTeacher) {
-    return `${className} ${lesson} zastępstwo z ${replacementTeacher}`;
+    return `${className} ${lesson} zastępstwo z ${replacementTeacher}${sourceLesson ? ` (${sourceLesson})` : ''}`;
   }
 
   if (entry?.type === 'moved') {
+    if (replacementTeacher) {
+      return `${className} ${lesson} przeniesione / zastępstwo z ${replacementTeacher}${sourceLesson ? ` (${sourceLesson})` : ''}`;
+    }
+
     return raw || `${className} ${lesson} przeniesione`;
   }
 
@@ -965,8 +1064,7 @@ function buildSummary(data, saved) {
   const selectedClasses = getSelectedSubClasses(saved, availableClasses);
   const entries = sortSubEntries(collectEntriesForSelectedClasses(data, selectedClasses));
 
-  const teacherGroups = getTeacherGroups(data);
-  const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
+  const absentTeachers = getAbsentTeachers(data);
 
   if (!entries.length) {
     return `Stety lub niestety dla ${saved.name} — brak zastępstw, współczuję.`;
@@ -1083,8 +1181,7 @@ function renderSubstitutions(data) {
   const selectedClasses = getSelectedSubClasses(saved, availableClasses);
   const selectedEntries = sortSubEntries(collectEntriesForSelectedClasses(data, selectedClasses));
 
-  const teacherGroups = getTeacherGroups(data);
-  const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
+  const absentTeachers = getAbsentTeachers(data);
 
   if (subDate) {
     subDate.textContent =
@@ -1158,6 +1255,7 @@ async function loadSubstitutions() {
       ...data,
       general: Array.isArray(data.general) ? data.general : [],
       teachers: Array.isArray(data.teachers) ? data.teachers : [],
+      absentTeachers: Array.isArray(data.absentTeachers) ? data.absentTeachers : [],
       rawText: data.rawText || ''
     };
 
