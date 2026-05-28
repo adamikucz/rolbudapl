@@ -4,6 +4,9 @@ const SUB_BACKEND_URL = 'https://rolbuda.vercel.app/api/substitutions';
 const NEWS_BACKEND_URL = 'https://rolbuda.vercel.app/api/news';
 const PLAN_BACKEND_URL = 'https://rolbuda.vercel.app/api/plan';
 const DEPARTURES_BACKEND_URL = 'https://rolbuda.vercel.app/api/departures';
+const PUSH_PUBLIC_KEY_URL = 'https://rolbuda.vercel.app/api/push-public-key';
+const PUSH_SUBSCRIBE_URL = 'https://rolbuda.vercel.app/api/push-subscribe';
+const PUSH_TEST_URL = 'https://rolbuda.vercel.app/api/push-test';
 
 const substitutionsList = document.getElementById('substitutionsList');
 const subStatus = document.getElementById('subStatus');
@@ -15,6 +18,11 @@ const aiSummary = document.getElementById('aiSummary');
 
 const quickPanelMode = document.getElementById('quickPanelMode');
 const quickContent = document.getElementById('quickContent');
+
+const notificationPrompt = document.getElementById('notificationPrompt');
+const notificationAllow = document.getElementById('notificationAllow');
+const notificationLater = document.getElementById('notificationLater');
+const notificationHint = document.getElementById('notificationHint');
 
 const USER_CLASS_KEY = 'pzs2_user_class';
 const EXTRA_SUB_CLASSES_KEY = 'pzs2_extra_sub_classes';
@@ -30,6 +38,8 @@ const planPreview = document.getElementById('planPreview');
 
 const themeToggle = document.getElementById('themeToggle');
 const THEME_KEY = 'pzs2_theme';
+const NOTIFICATION_PROMPT_KEY = 'rolbuda_notifications_prompt';
+const NOTIFICATION_DISMISS_DAYS = 7;
 
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
 
@@ -46,16 +56,18 @@ let CLASSES = [];
 let lastScroll = 0;
 
 const DEPARTURES_CACHE_KEY = 'pzs2_departures_cache';
-const DEPARTURES_REFRESH_INTERVAL = 60000;
-const DEPARTURES_MAX_CACHE_AGE = 1000 * 60 * 60 * 8;
+const FAVORITE_BUSES_KEY = 'pzs2_favorite_buses';
+const BUS_NOTIFY_HISTORY_KEY = 'pzs2_bus_notify_history';
+const PUSH_CLIENT_ID_KEY = 'pzs2_push_client_id';
+const BUS_REMINDER_MINUTES = 10;
 let DEPARTURES_DATA = null;
 let DEPARTURES_OFFLINE = false;
-let DEPARTURES_STALE = false;
-let DEPARTURES_WARNING = '';
-let DEPARTURES_REFRESH_TIMER = null;
 let BUS_SHOW_ALL = false;
 let ACTIVE_QUICK_MODE = 'buses';
 let ACTIVE_BUS_STOP = 0;
+let FAVORITE_BUSES = loadFavoriteBuses();
+let BUS_REMINDER_TIMERS = new Map();
+let PUSH_PUBLIC_KEY = null;
 
 /* =========================
    OGÓLNE HELPERY
@@ -142,13 +154,9 @@ function getDepartureLimit() {
 
 function saveDeparturesCache(data) {
   try {
-    const now = Date.now();
     localStorage.setItem(DEPARTURES_CACHE_KEY, JSON.stringify({
-      savedAt: now,
-      data: {
-        ...data,
-        fetchedAt: data?.fetchedAt || now
-      }
+      savedAt: Date.now(),
+      data
     }));
   } catch {
     // localStorage może być pełny albo niedostępny — wtedy po prostu nie zapisujemy fallbacku.
@@ -158,54 +166,23 @@ function saveDeparturesCache(data) {
 function loadDeparturesCache() {
   try {
     const cached = JSON.parse(localStorage.getItem(DEPARTURES_CACHE_KEY) || 'null');
-
-    if (!cached?.data) return null;
-
-    const savedAt = Number(cached.savedAt || 0);
-    const fetchedAt = Number(cached.data?.fetchedAt || savedAt || 0);
-
-    return {
-      ...cached,
-      stale: !fetchedAt || !isSameLocalDay(fetchedAt, Date.now()) || Date.now() - fetchedAt > DEPARTURES_MAX_CACHE_AGE
-    };
+    return cached?.data ? cached : null;
   } catch {
     return null;
   }
 }
 
-function isSameLocalDay(a, b) {
-  const first = new Date(a);
-  const second = new Date(b);
+function formatDataTime(timestamp) {
+  if (!timestamp) return '';
 
-  return (
-    first.getFullYear() === second.getFullYear() &&
-    first.getMonth() === second.getMonth() &&
-    first.getDate() === second.getDate()
-  );
-}
-
-function formatDataTime(value) {
-  if (!value) return '';
-
-  const raw = Number(value);
-  const millis = raw < 10000000000 ? raw * 1000 : raw;
-  const date = new Date(millis);
+  const date = new Date(Number(timestamp) * 1000);
 
   if (Number.isNaN(date.getTime())) return '';
 
-  const time = date.toLocaleTimeString('pl-PL', {
+  return date.toLocaleTimeString('pl-PL', {
     hour: '2-digit',
     minute: '2-digit'
   });
-
-  if (isSameLocalDay(date.getTime(), Date.now())) return time;
-
-  const day = date.toLocaleDateString('pl-PL', {
-    day: '2-digit',
-    month: '2-digit'
-  });
-
-  return `${day}, ${time}`;
 }
 
 function getDepartureMeta(dep) {
@@ -220,16 +197,226 @@ function getDepartureMeta(dep) {
   return meta.join(' · ');
 }
 
-function renderDepartureRow(dep) {
+
+function loadFavoriteBuses() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FAVORITE_BUSES_KEY) || '[]');
+    return new Set(Array.isArray(saved) ? saved : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveFavoriteBuses() {
+  try {
+    localStorage.setItem(FAVORITE_BUSES_KEY, JSON.stringify([...FAVORITE_BUSES]));
+  } catch {
+    // Brak miejsca w localStorage nie powinien blokować działania strony.
+  }
+}
+
+function getPushClientId() {
+  let id = localStorage.getItem(PUSH_CLIENT_ID_KEY);
+  if (!id) {
+    id = `rolbuda-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(PUSH_CLIENT_ID_KEY, id);
+  }
+  return id;
+}
+
+function getDepartureFavoriteKey(stop, dep) {
+  const stopId = stop?.id || 'stop';
+  const directionPart = dep.directionId || dep.direction || 'direction';
+  return `${stopId}|${dep.line}|${directionPart}`.toLowerCase();
+}
+
+function getFavoriteMeta(stop, dep) {
+  return {
+    key: getDepartureFavoriteKey(stop, dep),
+    stopId: stop?.id || '',
+    stopLabel: stop?.label || '',
+    stationName: stop?.stationName || '',
+    line: dep.line || '',
+    directionId: dep.directionId || '',
+    direction: dep.direction || '',
+    platform: dep.platform || ''
+  };
+}
+
+function isFavoriteDeparture(stop, dep) {
+  return FAVORITE_BUSES.has(getDepartureFavoriteKey(stop, dep));
+}
+
+function parseDepartureTimeToDate(dep) {
+  if (!dep || dep.canceled) return null;
+
+  if (dep.departureTimestamp) {
+    const fromBackend = new Date(Number(dep.departureTimestamp) * 1000);
+    if (!Number.isNaN(fromBackend.getTime())) return fromBackend;
+  }
+
+  const rawTime = String(dep.time || '').trim().toLowerCase();
+  const relative = rawTime.match(/^(\d+)\s*min/);
+
+  if (relative) {
+    const minutes = Number(relative[1]);
+    if (Number.isFinite(minutes)) return new Date(Date.now() + minutes * 60 * 1000);
+  }
+
+  const clock = rawTime.match(/^(\d{1,2}):(\d{2})$/);
+  if (clock) {
+    const date = new Date();
+    date.setHours(Number(clock[1]), Number(clock[2]), 0, 0);
+
+    // Jeżeli API pokazuje późny kurs po północy, nie planujemy go jako dzisiejszej przeszłości.
+    if (date.getTime() < Date.now() - 60 * 60 * 1000) {
+      date.setDate(date.getDate() + 1);
+    }
+
+    return date;
+  }
+
+  return null;
+}
+
+function getBusNotifyHistory() {
+  try {
+    const history = JSON.parse(localStorage.getItem(BUS_NOTIFY_HISTORY_KEY) || '{}');
+    const now = Date.now();
+    const maxAge = 36 * 60 * 60 * 1000;
+
+    Object.keys(history).forEach(key => {
+      if (now - Number(history[key] || 0) > maxAge) delete history[key];
+    });
+
+    return history;
+  } catch {
+    return {};
+  }
+}
+
+function saveBusNotifyHistory(history) {
+  try {
+    localStorage.setItem(BUS_NOTIFY_HISTORY_KEY, JSON.stringify(history));
+  } catch {
+    // Historia anty-duplikacyjna jest pomocnicza.
+  }
+}
+
+function markBusReminderSent(reminderKey) {
+  const history = getBusNotifyHistory();
+  history[reminderKey] = Date.now();
+  saveBusNotifyHistory(history);
+}
+
+function wasBusReminderSent(reminderKey) {
+  return Boolean(getBusNotifyHistory()[reminderKey]);
+}
+
+async function showBusReminderNotification(stop, dep, departureDate, reminderKey) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!('serviceWorker' in navigator)) return;
+  if (!isFavoriteDeparture(stop, dep)) return;
+  if (wasBusReminderSent(reminderKey)) return;
+
+  const registration = await navigator.serviceWorker.ready;
+  const minutes = Math.max(0, Math.round((departureDate.getTime() - Date.now()) / 60000));
+  const direction = dep.direction || 'wybrany kierunek';
+
+  await registration.showNotification(`Rolbuda · bus ${dep.line}`, {
+    body: `Twój ulubiony bus odjeżdża za około ${minutes} min: ${direction}`,
+    icon: '/assets/icon-192.png',
+    badge: '/assets/favicon.png',
+    tag: `rolbuda-bus-${reminderKey}`,
+    renotify: false,
+    requireInteraction: false,
+    data: {
+      url: '/#start'
+    }
+  });
+
+  markBusReminderSent(reminderKey);
+}
+
+function clearBusReminderTimers() {
+  BUS_REMINDER_TIMERS.forEach(timer => clearTimeout(timer));
+  BUS_REMINDER_TIMERS.clear();
+}
+
+function scheduleFavoriteBusNotifications() {
+  clearBusReminderTimers();
+
+  if (!DEPARTURES_DATA?.stops?.length || !FAVORITE_BUSES.size) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+
+  const now = Date.now();
+  const maxDelay = 24 * 60 * 60 * 1000;
+
+  DEPARTURES_DATA.stops.forEach(stop => {
+    (stop.departures || []).forEach(dep => {
+      if (!isFavoriteDeparture(stop, dep)) return;
+
+      const departureDate = parseDepartureTimeToDate(dep);
+      if (!departureDate) return;
+
+      const departureMs = departureDate.getTime();
+      const notifyAt = departureMs - BUS_REMINDER_MINUTES * 60 * 1000;
+      const reminderKey = `${getDepartureFavoriteKey(stop, dep)}|${departureMs}`;
+
+      if (wasBusReminderSent(reminderKey)) return;
+      if (departureMs <= now + 60 * 1000) return;
+
+      const delay = Math.max(0, notifyAt - now);
+      if (delay > maxDelay) return;
+
+      const timer = setTimeout(() => {
+        showBusReminderNotification(stop, dep, departureDate, reminderKey)
+          .catch(err => console.error('Błąd lokalnego przypomnienia o busie:', err));
+      }, delay);
+
+      BUS_REMINDER_TIMERS.set(reminderKey, timer);
+    });
+  });
+}
+
+function toggleFavoriteBus(stop, dep) {
+  const key = getDepartureFavoriteKey(stop, dep);
+
+  if (FAVORITE_BUSES.has(key)) {
+    FAVORITE_BUSES.delete(key);
+  } else {
+    FAVORITE_BUSES.add(key);
+  }
+
+  saveFavoriteBuses();
+  renderQuickPanel();
+  scheduleFavoriteBusNotifications();
+  syncPushSubscription().catch(err => console.warn('Nie udało się zsynchronizować ulubionych busów:', err));
+}
+
+function bindRenderedBusRows(activeStop) {
+  document.querySelectorAll('[data-favorite-bus]').forEach(button => {
+    button.addEventListener('click', () => {
+      const index = Number(button.dataset.favoriteBus || -1);
+      const dep = activeStop?.departures?.[index];
+      if (!dep) return;
+      toggleFavoriteBus(activeStop, dep);
+    });
+  });
+}
+
+function renderDepartureRow(dep, stop, originalIndex) {
   const cancelled = dep.canceled ? ' cancelled' : '';
+  const favorite = isFavoriteDeparture(stop, dep) ? ' favorite' : '';
   const direction = dep.direction || 'Kierunek niepodany';
   const meta = getDepartureMeta(dep);
   const timeNote = dep.canceled
     ? 'odwołany'
     : (dep.scheduledTime && dep.scheduledTime !== dep.time ? `planowo ${dep.scheduledTime}` : '');
+  const pressed = isFavoriteDeparture(stop, dep) ? 'true' : 'false';
 
   return `
-    <article class="bus-row${cancelled}">
+    <button class="bus-row${cancelled}${favorite}" type="button" data-favorite-bus="${originalIndex}" aria-pressed="${pressed}" title="Kliknij, aby ${pressed === 'true' ? 'usunąć z' : 'dodać do'} ulubionych busów">
       <div class="bus-line">${escapeHtml(dep.line)}</div>
       <div class="bus-main">
         <div class="bus-direction">${escapeHtml(direction)}</div>
@@ -239,7 +426,7 @@ function renderDepartureRow(dep) {
         ${escapeHtml(dep.time)}
         ${timeNote ? `<small>${escapeHtml(timeNote)}</small>` : ''}
       </div>
-    </article>
+    </button>
   `;
 }
 
@@ -260,7 +447,7 @@ function renderBusStop(stop, limit) {
 
       <div class="bus-list">
         ${visible.length
-          ? visible.map(renderDepartureRow).join('')
+          ? visible.map(dep => renderDepartureRow(dep, stop, departures.indexOf(dep))).join('')
           : `<div class="quick-empty" style="padding:14px;">Brak najbliższych odjazdów.</div>`
         }
       </div>
@@ -286,21 +473,21 @@ function renderBuses() {
   const activeStop = stops[stopIndex];
   const departures = activeStop?.departures || [];
   const hasMore = departures.length > limit;
-  const updatedAt = formatDataTime(DEPARTURES_DATA.fetchedAt);
+  const updatedAt = formatDataTime(DEPARTURES_DATA.updatedAt);
 
   renderBusStopTabs(stops, stopIndex);
 
   quickContent.innerHTML = `
     <div class="bus-widget">
-      ${DEPARTURES_WARNING ? `
+      ${DEPARTURES_OFFLINE ? `
         <div class="bus-offline-note">
-          ${escapeHtml(DEPARTURES_WARNING)}
+          Tryb offline — pokazuję ostatnio zapisane odjazdy. Godziny mogą być już nieaktualne.
         </div>
       ` : ''}
 
       ${renderBusStop(activeStop, limit)}
 
-      ${updatedAt ? `<div class="quick-note">Pobrano odjazdy: ${escapeHtml(updatedAt)}</div>` : ''}
+      ${updatedAt ? `<div class="quick-note">Aktualizacja danych: ${escapeHtml(updatedAt)}</div>` : ''}
 
       ${hasMore ? `
         <div class="bus-more-wrap">
@@ -319,6 +506,8 @@ function renderBuses() {
       renderBuses();
     });
   }
+
+  bindRenderedBusRows(activeStop);
 }
 
 function renderTeachersQuickInfo() {
@@ -328,7 +517,15 @@ function renderTeachersQuickInfo() {
     <div class="quick-note">
       Tu można później dodać szybkie informacje dla nauczycieli, np. dyżury, link do dziennika, sale lub ważne komunikaty.
     </div>
+    <button id="notificationTestButton" class="notification-test-button" type="button">
+      Wyślij test powiadomienia
+    </button>
   `;
+
+  const testButton = document.getElementById('notificationTestButton');
+  if (testButton) {
+    testButton.addEventListener('click', sendTestNotification);
+  }
 }
 
 function renderBusStopTabs(stops = [], activeIndex = ACTIVE_BUS_STOP) {
@@ -383,8 +580,7 @@ async function loadDepartures({ silent = false } = {}) {
   }
 
   try {
-    const url = `${DEPARTURES_BACKEND_URL}?_=${Date.now()}`;
-    const res = await fetch(url, {
+    const res = await fetch(DEPARTURES_BACKEND_URL, {
       cache: 'no-store'
     });
 
@@ -393,17 +589,12 @@ async function loadDepartures({ silent = false } = {}) {
     }
 
     const data = await res.json();
-    const normalizedData = {
-      ...data,
-      fetchedAt: Date.now()
-    };
 
-    DEPARTURES_DATA = normalizedData;
+    DEPARTURES_DATA = data;
     DEPARTURES_OFFLINE = false;
-    DEPARTURES_STALE = false;
-    DEPARTURES_WARNING = '';
-    saveDeparturesCache(normalizedData);
+    saveDeparturesCache(data);
     renderQuickPanel();
+    scheduleFavoriteBusNotifications();
   } catch (err) {
     console.error('Błąd odjazdów:', err);
 
@@ -412,41 +603,13 @@ async function loadDepartures({ silent = false } = {}) {
     if (cached?.data) {
       DEPARTURES_DATA = cached.data;
       DEPARTURES_OFFLINE = true;
-      DEPARTURES_STALE = Boolean(cached.stale);
-      DEPARTURES_WARNING = navigator.onLine === false
-        ? 'Brak połączenia — pokazuję ostatnio zapisane odjazdy.'
-        : (cached.stale
-          ? 'Nie udało się pobrać aktualnych odjazdów — pokazuję ostatni zapisany wynik.'
-          : 'Chwilowy problem z pobraniem odjazdów — pokazuję ostatni zapisany wynik.');
       renderQuickPanel();
+      scheduleFavoriteBusNotifications();
       return;
     }
 
     renderBuses();
   }
-}
-
-
-function setupDeparturesAutoRefresh() {
-  if (DEPARTURES_REFRESH_TIMER) {
-    clearInterval(DEPARTURES_REFRESH_TIMER);
-  }
-
-  DEPARTURES_REFRESH_TIMER = setInterval(() => {
-    if (document.visibilityState === 'visible') {
-      loadDepartures({ silent: true });
-    }
-  }, DEPARTURES_REFRESH_INTERVAL);
-
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      loadDepartures({ silent: true });
-    }
-  });
-
-  window.addEventListener('focus', () => {
-    loadDepartures({ silent: true });
-  });
 }
 
 /* =========================
@@ -531,7 +694,8 @@ function normalizeSubType(entry) {
   if (
     raw.includes('przeniesienie') ||
     raw.includes('przeniesiona') ||
-    raw.includes('przeniesie')
+    raw.includes('przeniesie') ||
+    raw.includes(' z lek')
   ) {
     return 'moved';
   }
@@ -605,53 +769,6 @@ function getTeacherGroups(data) {
 
 function getAllNormalizedEntries(data) {
   return getTeacherGroups(data).flatMap(group => group.entries);
-}
-
-function extractTeacherNamesFromText(text) {
-  const source = String(text || '')
-    .replace(/\s+/g, ' ')
-    .replace(/\blek\.?\s*[\d,\-\si]+\s*-\s*/gi, ' ')
-    .replace(/\bl\.\s*\d+/gi, ' ')
-    .trim();
-
-  const matches = [...source.matchAll(/\b[A-ZĄĆĘŁŃÓŚŹŻ\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?/gu)];
-
-  return [...new Set(matches.map(match => cleanTeacherName(match[0])))] ;
-}
-
-function getAbsentTeachers(data) {
-  if (Array.isArray(data?.absentTeachers) && data.absentTeachers.length) {
-    return [...new Set(data.absentTeachers.map(cleanTeacherName).filter(Boolean))];
-  }
-
-  const general = Array.isArray(data?.general) ? data.general : [];
-  const chunks = [];
-  let collecting = false;
-
-  for (const entry of general) {
-    const raw = String(entry?.raw || entry?.summary || '').trim();
-
-    if (!raw) continue;
-
-    if (/^nauczyciele\s+nieobecni\s*:/i.test(raw)) {
-      collecting = true;
-      chunks.push(raw.replace(/^nauczyciele\s+nieobecni\s*:/i, ''));
-      continue;
-    }
-
-    if (!collecting) continue;
-
-    if (/^(?:praktyki|nauczyciele\s+zaangażowani|[•]|projekt|wycieczka|warsztaty|olimpiada)\b/i.test(raw)) {
-      break;
-    }
-
-    chunks.push(raw);
-  }
-
-  const parsed = extractTeacherNamesFromText(chunks.join(' '));
-  if (parsed.length) return parsed;
-
-  return [...new Set(getTeacherGroups(data).map(g => cleanTeacherName(g.teacher)).filter(Boolean))];
 }
 
 function normalizeDedupText(text) {
@@ -876,140 +993,15 @@ function bindSubEntriesToggle() {
   });
 }
 
-
-function getFirstLesson(entry) {
-  const lessons = Array.isArray(entry?.lessons) ? entry.lessons : [];
-  const nums = lessons
-    .map(Number)
-    .filter(n => !Number.isNaN(n))
-    .sort((a, b) => a - b);
-
-  return nums.length ? nums[0] : 999;
-}
-
-function sortSubEntries(entries) {
-  return [...entries].sort((a, b) => {
-    const classA = String(a?.className || a?.classes?.[0] || '');
-    const classB = String(b?.className || b?.classes?.[0] || '');
-    const byClass = sortClassNames(classA, classB);
-
-    if (byClass !== 0) return byClass;
-
-    const byLesson = getFirstLesson(a) - getFirstLesson(b);
-    if (byLesson !== 0) return byLesson;
-
-    return String(a?.teacher || '').localeCompare(String(b?.teacher || ''), 'pl');
-  });
-}
-
-function getEntryClassName(entry) {
-  return String(entry?.className || entry?.classes?.[0] || '—').replace(/\s+/g, '');
-}
-
-function cleanTeacherName(value) {
-  return String(value || '')
-    .replace(/\s+/g, ' ')
-    .replace(/\s+,/g, ',')
-    .replace(/[*]+\s*$/g, '')
-    .trim();
-}
-
-function stripEntryPrefix(raw) {
-  return String(raw || '')
-    .replace(/^\s*[1-5]\s*(?:LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\s*/iu, '')
-    .replace(/^\s*(?:lek|le|l)\.?\s*\d+(?:\s*[-,i]\s*\d+)*\s*/iu, '')
-    .trim();
-}
-
-function getSourceLessonNote(entry) {
-  const raw = String(entry?.raw || entry?.summary || '');
-  const lesson = raw.match(/\bz\s*lek\.?\s*([\d,\-\si]+)/iu);
-
-  if (lesson) {
-    return `z lek. ${lesson[1].replace(/\s+/g, ' ').trim()}`;
-  }
-
-  const dateLesson = raw.match(/\blek\.?\s*z\s*(\d{1,2}-\d{2})(?:\s*l\.?\s*(\d+))?/iu);
-
-  if (dateLesson) {
-    return dateLesson[2]
-      ? `lekcja z ${dateLesson[1]}, lek. ${dateLesson[2]}`
-      : `lekcja z ${dateLesson[1]}`;
-  }
-
-  return '';
-}
-
-function getReplacementTeacher(entry) {
-  const raw = String(entry?.raw || entry?.summary || '');
-  const withoutPrefix = stripEntryPrefix(raw);
-
-  if (!withoutPrefix || /zwolnion[ay]/iu.test(withoutPrefix)) return '';
-  if (/^biblioteka$/iu.test(withoutPrefix)) return 'biblioteka';
-
-  const teacherMatch = withoutPrefix.match(/^([A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?)/u);
-
-  if (teacherMatch) {
-    return cleanTeacherName(teacherMatch[1]);
-  }
-
-  return cleanTeacherName(
-    withoutPrefix
-      .replace(/\bz\s*lek\.?\s*[\d,\-\si]+/giu, '')
-      .replace(/\blek\.?\s*z\s*\d{1,2}-\d{2}(?:\s*l\.?\s*\d+)?/giu, '')
-      .trim()
-  );
-}
-
-function formatSubEntryTitle(entry) {
-  const className = getEntryClassName(entry);
-  const lesson = formatLessonRange(entry?.lessons);
-  const replacedTeacher = cleanTeacherName(entry?.teacher);
-
-  return [className, lesson, replacedTeacher]
-    .filter(Boolean)
-    .join(' · ');
-}
-
-function formatSubEntryDescription(entry) {
-  const className = getEntryClassName(entry);
-  const lesson = formatLessonRange(entry?.lessons);
-  const raw = String(entry?.raw || entry?.summary || '').trim();
-  const replacementTeacher = getReplacementTeacher(entry);
-  const sourceLesson = getSourceLessonNote(entry);
-
-  if (entry?.type === 'cancelled') {
-    return `${className} ${lesson} zwolniona`;
-  }
-
-  if (replacementTeacher && replacementTeacher.toLowerCase() === 'biblioteka') {
-    return `${className} ${lesson} biblioteka`;
-  }
-
-  if (entry?.type === 'substitution' && replacementTeacher) {
-    return `${className} ${lesson} zastępstwo z ${replacementTeacher}${sourceLesson ? ` (${sourceLesson})` : ''}`;
-  }
-
-  if (entry?.type === 'moved') {
-    if (replacementTeacher) {
-      return `${className} ${lesson} przeniesione / zastępstwo z ${replacementTeacher}${sourceLesson ? ` (${sourceLesson})` : ''}`;
-    }
-
-    return raw || `${className} ${lesson} przeniesione`;
-  }
-
-  return raw || `${className} ${lesson}`;
-}
-
 function formatLessonRange(lessons) {
-  if (!Array.isArray(lessons) || !lessons.length) return 'nieznana lekcja';
+  if (!Array.isArray(lessons) || !lessons.length) return 'bez lekcji';
 
   const sorted = [...new Set(lessons)]
     .map(Number)
     .filter(n => !Number.isNaN(n))
     .sort((a, b) => a - b);
 
-  if (!sorted.length) return 'nieznana lekcja';
+  if (!sorted.length) return 'bez lekcji';
 
   const ranges = [];
   let start = sorted[0];
@@ -1062,9 +1054,10 @@ function buildSummary(data, saved) {
 
   const availableClasses = getClassesWithSubstitutions(data);
   const selectedClasses = getSelectedSubClasses(saved, availableClasses);
-  const entries = sortSubEntries(collectEntriesForSelectedClasses(data, selectedClasses));
+  const entries = collectEntriesForSelectedClasses(data, selectedClasses);
 
-  const absentTeachers = getAbsentTeachers(data);
+  const teacherGroups = getTeacherGroups(data);
+  const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
 
   if (!entries.length) {
     return `Stety lub niestety dla ${saved.name} — brak zastępstw, współczuję.`;
@@ -1146,11 +1139,12 @@ function renderPersonalCard(entries, saved, selectedClasses = []) {
               <div class="sub-mini-item ${item.type === 'cancelled' ? 'sub-card--cancelled' : ''} ${item.type === 'moved' ? 'sub-card--moved' : ''} ${item.type === 'substitution' ? 'sub-card--substitution' : ''}">
                 <div class="sub-mini-head">
                   <div class="sub-mini-title">
-                    ${escapeHtml(formatSubEntryTitle(item))}
+                    ${escapeHtml(item.className || (item.classes && item.classes[0]) || '—')}
+                    · ${escapeHtml(formatLessonRange(item.lessons))}
                   </div>
                   <div class="sub-type ${typeClass(item.type)}">${typeLabel(item.type)}</div>
                 </div>
-                <div class="sub-line">${escapeHtml(formatSubEntryDescription(item))}</div>
+                <div class="sub-line">${escapeHtml(item.summary || item.raw || '')}</div>
               </div>
             `).join('')
           : `<div class="sub-empty">Brak szczegółów dla wybranych klas.</div>`
@@ -1179,9 +1173,10 @@ function renderSubstitutions(data) {
 
   const availableClasses = getClassesWithSubstitutions(data);
   const selectedClasses = getSelectedSubClasses(saved, availableClasses);
-  const selectedEntries = sortSubEntries(collectEntriesForSelectedClasses(data, selectedClasses));
+  const selectedEntries = collectEntriesForSelectedClasses(data, selectedClasses);
 
-  const absentTeachers = getAbsentTeachers(data);
+  const teacherGroups = getTeacherGroups(data);
+  const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
 
   if (subDate) {
     subDate.textContent =
@@ -1255,7 +1250,6 @@ async function loadSubstitutions() {
       ...data,
       general: Array.isArray(data.general) ? data.general : [],
       teachers: Array.isArray(data.teachers) ? data.teachers : [],
-      absentTeachers: Array.isArray(data.absentTeachers) ? data.absentTeachers : [],
       rawText: data.rawText || ''
     };
 
@@ -1662,6 +1656,274 @@ function toggleTheme() {
   applyTheme(nextTheme);
 }
 
+
+/* =========================
+   POWIADOMIENIA
+========================= */
+
+function isNotificationPromptAllowed() {
+  if (!notificationPrompt) return false;
+  if (!('Notification' in window)) return false;
+  if (!('serviceWorker' in navigator)) return false;
+  if (!window.isSecureContext) return false;
+  if (Notification.permission !== 'default') return false;
+
+  const isMobileView = window.matchMedia('(max-width: 820px)').matches;
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+  // Powiadomienia mają sens głównie mobilnie/PWA, ale nie blokujemy ich w zainstalowanej aplikacji.
+  if (!isMobileView && !isStandalone) return false;
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(NOTIFICATION_PROMPT_KEY) || 'null');
+    if (!saved?.dismissedAt) return true;
+
+    const dismissedAt = Number(saved.dismissedAt);
+    const cooldown = NOTIFICATION_DISMISS_DAYS * 24 * 60 * 60 * 1000;
+    return Date.now() - dismissedAt > cooldown;
+  } catch {
+    return true;
+  }
+}
+
+function showNotificationPrompt() {
+  if (!isNotificationPromptAllowed()) return;
+  notificationPrompt.classList.remove('hidden');
+  document.body.classList.add('notification-prompt-open');
+}
+
+function hideNotificationPrompt({ remember = false } = {}) {
+  if (!notificationPrompt) return;
+
+  notificationPrompt.classList.add('hidden');
+  document.body.classList.remove('notification-prompt-open');
+
+  if (remember) {
+    localStorage.setItem(NOTIFICATION_PROMPT_KEY, JSON.stringify({
+      dismissedAt: Date.now()
+    }));
+  }
+}
+
+function setNotificationHint(message) {
+  if (notificationHint) notificationHint.textContent = message || '';
+}
+
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+
+  return outputArray;
+}
+
+async function getPushPublicKey() {
+  if (PUSH_PUBLIC_KEY) return PUSH_PUBLIC_KEY;
+
+  const response = await fetch(PUSH_PUBLIC_KEY_URL, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`Public key HTTP ${response.status}`);
+
+  const data = await response.json();
+  if (!data.publicKey) throw new Error('Brak VAPID_PUBLIC_KEY po stronie backendu');
+
+  PUSH_PUBLIC_KEY = data.publicKey;
+  return PUSH_PUBLIC_KEY;
+}
+
+function getFavoriteBusPayload() {
+  const favorites = [];
+
+  if (DEPARTURES_DATA?.stops?.length) {
+    DEPARTURES_DATA.stops.forEach(stop => {
+      (stop.departures || []).forEach(dep => {
+        const key = getDepartureFavoriteKey(stop, dep);
+        if (!FAVORITE_BUSES.has(key)) return;
+        if (favorites.some(item => item.key === key)) return;
+        favorites.push(getFavoriteMeta(stop, dep));
+      });
+    });
+  }
+
+  // Jeżeli użytkownik jest offline albo bus zniknął z najbliższych odjazdów, wysyłamy chociaż klucze.
+  FAVORITE_BUSES.forEach(key => {
+    if (!favorites.some(item => item.key === key)) favorites.push({ key });
+  });
+
+  return favorites;
+}
+
+async function getPushSubscription({ create = false } = {}) {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null;
+  if (Notification.permission !== 'granted') return null;
+
+  const registration = await navigator.serviceWorker.ready;
+  const existing = await registration.pushManager.getSubscription();
+
+  if (existing || !create) return existing;
+
+  const publicKey = await getPushPublicKey();
+  return registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToUint8Array(publicKey)
+  });
+}
+
+async function syncPushSubscription({ create = false } = {}) {
+  const subscription = await getPushSubscription({ create });
+  if (!subscription) return { ok: false, mode: 'local' };
+
+  const response = await fetch(PUSH_SUBSCRIBE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      clientId: getPushClientId(),
+      subscription,
+      favoriteBuses: getFavoriteBusPayload(),
+      notifyBeforeMinutes: BUS_REMINDER_MINUTES
+    })
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || `Subscribe HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+async function sendTestNotification() {
+  if (!('Notification' in window)) return;
+
+  if (Notification.permission !== 'granted') {
+    showNotificationPrompt();
+    return;
+  }
+
+  const registration = await navigator.serviceWorker.ready;
+  const subscription = await getPushSubscription({ create: true }).catch(() => null);
+
+  if (subscription) {
+    try {
+      const response = await fetch(PUSH_TEST_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: getPushClientId(),
+          subscription,
+          title: 'Rolbuda · test',
+          body: 'Powiadomienia działają poprawnie.',
+          url: '/#zastepstwa'
+        })
+      });
+
+      if (response.ok) return;
+    } catch (err) {
+      console.warn('Test push przez backend nie wyszedł, używam lokalnego powiadomienia:', err);
+    }
+  }
+
+  await registration.showNotification('Rolbuda · test', {
+    body: 'Powiadomienia lokalne działają poprawnie.',
+    icon: '/assets/icon-192.png',
+    badge: '/assets/favicon.png',
+    tag: 'rolbuda-local-test',
+    data: { url: '/#zastepstwa' }
+  });
+}
+
+async function showWelcomeNotification(registration) {
+  if (!registration?.showNotification || Notification.permission !== 'granted') return;
+
+  await registration.showNotification('Rolbuda', {
+    body: 'Powiadomienia są włączone. Damy znać, gdy pojawią się ważne zmiany.',
+    icon: '/assets/icon-192.png',
+    badge: '/assets/favicon.png',
+    tag: 'rolbuda-notifications-enabled',
+    renotify: false,
+    requireInteraction: false,
+    data: {
+      url: '/#zastepstwa'
+    }
+  });
+}
+
+async function enableNotifications() {
+  if (!('Notification' in window)) {
+    setNotificationHint('Ta przeglądarka nie obsługuje powiadomień.');
+    return;
+  }
+
+  if (!('serviceWorker' in navigator)) {
+    setNotificationHint('Powiadomienia wymagają Service Workera.');
+    return;
+  }
+
+  if (!window.isSecureContext) {
+    setNotificationHint('Powiadomienia działają tylko przez HTTPS.');
+    return;
+  }
+
+  try {
+    if (notificationAllow) notificationAllow.disabled = true;
+    setNotificationHint('Otwieram systemowe potwierdzenie...');
+
+    const permission = await Notification.requestPermission();
+
+    if (permission !== 'granted') {
+      setNotificationHint(permission === 'denied'
+        ? 'Powiadomienia są zablokowane w ustawieniach przeglądarki.'
+        : 'Powiadomienia nie zostały włączone.');
+      setTimeout(() => hideNotificationPrompt({ remember: true }), 1300);
+      return;
+    }
+
+    const registration = await navigator.serviceWorker.ready;
+    await syncPushSubscription({ create: true }).catch(err => {
+      console.warn('Push backend nie został podłączony, zostają lokalne przypomnienia:', err);
+    });
+    await showWelcomeNotification(registration);
+    scheduleFavoriteBusNotifications();
+    hideNotificationPrompt({ remember: false });
+  } catch (err) {
+    console.error('Błąd powiadomień:', err);
+    setNotificationHint('Nie udało się włączyć powiadomień.');
+  } finally {
+    if (notificationAllow) notificationAllow.disabled = false;
+  }
+}
+
+function bindNotifications() {
+  if (notificationAllow) {
+    notificationAllow.addEventListener('click', enableNotifications);
+  }
+
+  if (notificationLater) {
+    notificationLater.addEventListener('click', () => {
+      hideNotificationPrompt({ remember: true });
+    });
+  }
+
+  if (notificationPrompt) {
+    notificationPrompt.addEventListener('click', (event) => {
+      if (event.target === notificationPrompt) {
+        hideNotificationPrompt({ remember: true });
+      }
+    });
+  }
+
+  if ('Notification' in window && Notification.permission === 'granted') {
+    syncPushSubscription().catch(err => console.warn('Synchronizacja powiadomień pominięta:', err));
+  }
+
+  setTimeout(showNotificationPrompt, 900);
+}
+
 /* =========================
    START
 ========================= */
@@ -1672,8 +1934,9 @@ document.addEventListener('DOMContentLoaded', () => {
   loadNews();
   loadClasses();
   bindQuickControls();
-  setupDeparturesAutoRefresh();
+  bindNotifications();
   loadDepartures();
+  setInterval(() => loadDepartures({ silent: true }), 45000);
   onScroll();
 
   if (classSearch) {
@@ -1698,70 +1961,32 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 if ('serviceWorker' in navigator) {
-  let swReloading = false;
-
-  function reloadAfterServiceWorkerUpdate() {
-    const lastReload = Number(sessionStorage.getItem('sw-update-reload-at') || 0);
-
-    if (swReloading || Date.now() - lastReload < 5000) return;
-
-    swReloading = true;
-    sessionStorage.setItem('sw-update-reload-at', String(Date.now()));
-    window.location.reload();
-  }
-
-  function askWaitingWorkerToActivate(registration) {
-    if (registration.waiting) {
-      registration.waiting.postMessage({ type: 'SKIP_WAITING' });
-    }
-  }
-
   window.addEventListener('load', async () => {
     try {
-      const reg = await navigator.serviceWorker.register('/sw.js', {
-        updateViaCache: 'none'
-      });
-
+      const reg = await navigator.serviceWorker.register('/sw.js');
       console.log('Service Worker działa 🚀');
-
-      askWaitingWorkerToActivate(reg);
-      reg.update().catch(() => {});
 
       reg.addEventListener('updatefound', () => {
         const newWorker = reg.installing;
         if (!newWorker) return;
 
         newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            newWorker.postMessage({ type: 'SKIP_WAITING' });
+          if (
+            newWorker.state === 'installed' &&
+            navigator.serviceWorker.controller &&
+            !sessionStorage.getItem('sw-reloaded')
+          ) {
+            console.log('Wykryto nowe pliki aplikacji! Automatyczne odświeżenie...');
+            sessionStorage.setItem('sw-reloaded', 'true');
+            window.location.reload();
           }
         });
       });
 
-      let lastUpdateCheck = 0;
-      const checkForServiceWorkerUpdate = () => {
-        if (Date.now() - lastUpdateCheck < 60000) return;
-        lastUpdateCheck = Date.now();
-        reg.update().catch(() => {});
-      };
-
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-          checkForServiceWorkerUpdate();
-        }
-      });
-
-      window.addEventListener('focus', checkForServiceWorkerUpdate);
-
-      navigator.serviceWorker.addEventListener('message', (event) => {
-        if (event.data?.type === 'APP_UPDATED') {
-          reloadAfterServiceWorkerUpdate();
-        }
-      });
-
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        reloadAfterServiceWorkerUpdate();
+        sessionStorage.removeItem('sw-reloaded');
       });
+
     } catch (err) {
       console.error('SW error:', err);
     }
