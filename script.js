@@ -694,8 +694,7 @@ function normalizeSubType(entry) {
   if (
     raw.includes('przeniesienie') ||
     raw.includes('przeniesiona') ||
-    raw.includes('przeniesie') ||
-    raw.includes(' z lek')
+    raw.includes('przeniesie')
   ) {
     return 'moved';
   }
@@ -769,6 +768,53 @@ function getTeacherGroups(data) {
 
 function getAllNormalizedEntries(data) {
   return getTeacherGroups(data).flatMap(group => group.entries);
+}
+
+function extractTeacherNamesFromText(text) {
+  const source = String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\blek\.?\s*[\d,\-\si]+\s*-\s*/gi, ' ')
+    .replace(/\bl\.\s*\d+/gi, ' ')
+    .trim();
+
+  const matches = [...source.matchAll(/\b[A-ZĄĆĘŁŃÓŚŹŻ\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?/gu)];
+
+  return [...new Set(matches.map(match => cleanTeacherName(match[0])))] ;
+}
+
+function getAbsentTeachers(data) {
+  if (Array.isArray(data?.absentTeachers) && data.absentTeachers.length) {
+    return [...new Set(data.absentTeachers.map(cleanTeacherName).filter(Boolean))];
+  }
+
+  const general = Array.isArray(data?.general) ? data.general : [];
+  const chunks = [];
+  let collecting = false;
+
+  for (const entry of general) {
+    const raw = String(entry?.raw || entry?.summary || '').trim();
+
+    if (!raw) continue;
+
+    if (/^nauczyciele\s+nieobecni\s*:/i.test(raw)) {
+      collecting = true;
+      chunks.push(raw.replace(/^nauczyciele\s+nieobecni\s*:/i, ''));
+      continue;
+    }
+
+    if (!collecting) continue;
+
+    if (/^(?:praktyki|nauczyciele\s+zaangażowani|[•]|projekt|wycieczka|warsztaty|olimpiada)\b/i.test(raw)) {
+      break;
+    }
+
+    chunks.push(raw);
+  }
+
+  const parsed = extractTeacherNamesFromText(chunks.join(' '));
+  if (parsed.length) return parsed;
+
+  return [...new Set(getTeacherGroups(data).map(g => cleanTeacherName(g.teacher)).filter(Boolean))];
 }
 
 function normalizeDedupText(text) {
@@ -994,6 +1040,31 @@ function bindSubEntriesToggle() {
 }
 
 
+function getFirstLesson(entry) {
+  const lessons = Array.isArray(entry?.lessons) ? entry.lessons : [];
+  const nums = lessons
+    .map(Number)
+    .filter(n => !Number.isNaN(n))
+    .sort((a, b) => a - b);
+
+  return nums.length ? nums[0] : 999;
+}
+
+function sortSubEntries(entries) {
+  return [...entries].sort((a, b) => {
+    const classA = String(a?.className || a?.classes?.[0] || '');
+    const classB = String(b?.className || b?.classes?.[0] || '');
+    const byClass = sortClassNames(classA, classB);
+
+    if (byClass !== 0) return byClass;
+
+    const byLesson = getFirstLesson(a) - getFirstLesson(b);
+    if (byLesson !== 0) return byLesson;
+
+    return String(a?.teacher || '').localeCompare(String(b?.teacher || ''), 'pl');
+  });
+}
+
 function getEntryClassName(entry) {
   return String(entry?.className || entry?.classes?.[0] || '—').replace(/\s+/g, '');
 }
@@ -1009,8 +1080,7 @@ function cleanTeacherName(value) {
 function stripEntryPrefix(raw) {
   return String(raw || '')
     .replace(/^\s*[1-5]\s*(?:LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\s*/iu, '')
-    .replace(/^\s*(?:lek|le|l)\.?\s*[-–—]?\s*\d*(?:\s*[-,i]\s*\d+)*\s*/iu, '')
-    .replace(/^\s*[–—-]\s*[1-5]\s*(?:LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\s*[–—-]?\s*/iu, '')
+    .replace(/^\s*(?:lek|le|l)\.?\s*\d+(?:\s*[-,i]\s*\d+)*\s*/iu, '')
     .trim();
 }
 
@@ -1095,14 +1165,14 @@ function formatSubEntryDescription(entry) {
 }
 
 function formatLessonRange(lessons) {
-  if (!Array.isArray(lessons) || !lessons.length) return 'bez lekcji';
+  if (!Array.isArray(lessons) || !lessons.length) return 'nieznana lekcja';
 
   const sorted = [...new Set(lessons)]
     .map(Number)
     .filter(n => !Number.isNaN(n))
     .sort((a, b) => a - b);
 
-  if (!sorted.length) return 'bez lekcji';
+  if (!sorted.length) return 'nieznana lekcja';
 
   const ranges = [];
   let start = sorted[0];
@@ -1155,10 +1225,9 @@ function buildSummary(data, saved) {
 
   const availableClasses = getClassesWithSubstitutions(data);
   const selectedClasses = getSelectedSubClasses(saved, availableClasses);
-  const entries = collectEntriesForSelectedClasses(data, selectedClasses);
+  const entries = sortSubEntries(collectEntriesForSelectedClasses(data, selectedClasses));
 
-  const teacherGroups = getTeacherGroups(data);
-  const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
+  const absentTeachers = getAbsentTeachers(data);
 
   if (!entries.length) {
     return `Stety lub niestety dla ${saved.name} — brak zastępstw, współczuję.`;
@@ -1273,10 +1342,9 @@ function renderSubstitutions(data) {
 
   const availableClasses = getClassesWithSubstitutions(data);
   const selectedClasses = getSelectedSubClasses(saved, availableClasses);
-  const selectedEntries = collectEntriesForSelectedClasses(data, selectedClasses);
+  const selectedEntries = sortSubEntries(collectEntriesForSelectedClasses(data, selectedClasses));
 
-  const teacherGroups = getTeacherGroups(data);
-  const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
+  const absentTeachers = getAbsentTeachers(data);
 
   if (subDate) {
     subDate.textContent =
@@ -1350,6 +1418,7 @@ async function loadSubstitutions() {
       ...data,
       general: Array.isArray(data.general) ? data.general : [],
       teachers: Array.isArray(data.teachers) ? data.teachers : [],
+      absentTeachers: Array.isArray(data.absentTeachers) ? data.absentTeachers : [],
       rawText: data.rawText || ''
     };
 
