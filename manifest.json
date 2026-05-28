@@ -1,5 +1,5 @@
 {
-  "name": "PZS 2 Pszczyna - Nowa Strona",
+  "name": "Rolbuda",
   "short_name": "Rolbuda",
   "start_url": ".",
   "display": "standalone",
@@ -18,5 +18,6 @@
       "type": "image/png",
       "purpose": "any"
     }
-  ]
+  ],
+  "description": "Nieformalna aplikacja szkolna PZS 2 Pszczyna z zastępstwami, planem i szybkimi informacjami."
 }
