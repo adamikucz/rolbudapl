@@ -993,6 +993,107 @@ function bindSubEntriesToggle() {
   });
 }
 
+
+function getEntryClassName(entry) {
+  return String(entry?.className || entry?.classes?.[0] || '—').replace(/\s+/g, '');
+}
+
+function cleanTeacherName(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+,/g, ',')
+    .replace(/[*]+\s*$/g, '')
+    .trim();
+}
+
+function stripEntryPrefix(raw) {
+  return String(raw || '')
+    .replace(/^\s*[1-5]\s*(?:LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\s*/iu, '')
+    .replace(/^\s*(?:lek|le|l)\.?\s*[-–—]?\s*\d*(?:\s*[-,i]\s*\d+)*\s*/iu, '')
+    .replace(/^\s*[–—-]\s*[1-5]\s*(?:LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\s*[–—-]?\s*/iu, '')
+    .trim();
+}
+
+function getSourceLessonNote(entry) {
+  const raw = String(entry?.raw || entry?.summary || '');
+  const lesson = raw.match(/\bz\s*lek\.?\s*([\d,\-\si]+)/iu);
+
+  if (lesson) {
+    return `z lek. ${lesson[1].replace(/\s+/g, ' ').trim()}`;
+  }
+
+  const dateLesson = raw.match(/\blek\.?\s*z\s*(\d{1,2}-\d{2})(?:\s*l\.?\s*(\d+))?/iu);
+
+  if (dateLesson) {
+    return dateLesson[2]
+      ? `lekcja z ${dateLesson[1]}, lek. ${dateLesson[2]}`
+      : `lekcja z ${dateLesson[1]}`;
+  }
+
+  return '';
+}
+
+function getReplacementTeacher(entry) {
+  const raw = String(entry?.raw || entry?.summary || '');
+  const withoutPrefix = stripEntryPrefix(raw);
+
+  if (!withoutPrefix || /zwolnion[ay]/iu.test(withoutPrefix)) return '';
+  if (/^biblioteka$/iu.test(withoutPrefix)) return 'biblioteka';
+
+  const teacherMatch = withoutPrefix.match(/^([A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?)/u);
+
+  if (teacherMatch) {
+    return cleanTeacherName(teacherMatch[1]);
+  }
+
+  return cleanTeacherName(
+    withoutPrefix
+      .replace(/\bz\s*lek\.?\s*[\d,\-\si]+/giu, '')
+      .replace(/\blek\.?\s*z\s*\d{1,2}-\d{2}(?:\s*l\.?\s*\d+)?/giu, '')
+      .trim()
+  );
+}
+
+function formatSubEntryTitle(entry) {
+  const className = getEntryClassName(entry);
+  const lesson = formatLessonRange(entry?.lessons);
+  const replacedTeacher = cleanTeacherName(entry?.teacher);
+
+  return [className, lesson, replacedTeacher]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function formatSubEntryDescription(entry) {
+  const className = getEntryClassName(entry);
+  const lesson = formatLessonRange(entry?.lessons);
+  const raw = String(entry?.raw || entry?.summary || '').trim();
+  const replacementTeacher = getReplacementTeacher(entry);
+  const sourceLesson = getSourceLessonNote(entry);
+
+  if (entry?.type === 'cancelled') {
+    return `${className} ${lesson} zwolniona`;
+  }
+
+  if (replacementTeacher && replacementTeacher.toLowerCase() === 'biblioteka') {
+    return `${className} ${lesson} biblioteka`;
+  }
+
+  if (entry?.type === 'substitution' && replacementTeacher) {
+    return `${className} ${lesson} zastępstwo z ${replacementTeacher}${sourceLesson ? ` (${sourceLesson})` : ''}`;
+  }
+
+  if (entry?.type === 'moved') {
+    if (replacementTeacher) {
+      return `${className} ${lesson} przeniesione / zastępstwo z ${replacementTeacher}${sourceLesson ? ` (${sourceLesson})` : ''}`;
+    }
+
+    return raw || `${className} ${lesson} przeniesione`;
+  }
+
+  return raw || `${className} ${lesson}`;
+}
+
 function formatLessonRange(lessons) {
   if (!Array.isArray(lessons) || !lessons.length) return 'bez lekcji';
 
@@ -1139,12 +1240,11 @@ function renderPersonalCard(entries, saved, selectedClasses = []) {
               <div class="sub-mini-item ${item.type === 'cancelled' ? 'sub-card--cancelled' : ''} ${item.type === 'moved' ? 'sub-card--moved' : ''} ${item.type === 'substitution' ? 'sub-card--substitution' : ''}">
                 <div class="sub-mini-head">
                   <div class="sub-mini-title">
-                    ${escapeHtml(item.className || (item.classes && item.classes[0]) || '—')}
-                    · ${escapeHtml(formatLessonRange(item.lessons))}
+                    ${escapeHtml(formatSubEntryTitle(item))}
                   </div>
                   <div class="sub-type ${typeClass(item.type)}">${typeLabel(item.type)}</div>
                 </div>
-                <div class="sub-line">${escapeHtml(item.summary || item.raw || '')}</div>
+                <div class="sub-line">${escapeHtml(formatSubEntryDescription(item))}</div>
               </div>
             `).join('')
           : `<div class="sub-empty">Brak szczegółów dla wybranych klas.</div>`
