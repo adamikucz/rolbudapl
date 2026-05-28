@@ -1,174 +1,157 @@
-const CACHE_NAME = 'pzs2-cache-v4';
+const CACHE_NAME = "pzs2-cache-v4";
 
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/style.css',
-  '/script.js',
-  '/manifest.json',
-  '/sitemap.xml',
-  '/assets/favicon.png',
-  '/assets/logo-rolbudy.png',
-  '/assets/school-placeholder.jpg'
+  "/",
+  "/index.html",
+  "/style.css",
+  "/script.js",
+  "/manifest.json",
+  "/sitemap.xml",
+  "/assets/favicon.png",
+  "/assets/logo-rolbudy.png",
+  "/assets/school-placeholder.jpg"
 ];
 
-const API_PATHS = [
-  '/api/substitutions',
-  '/api/news',
-  '/api/plan',
-  '/api/classes',
-  '/api/departures'
-];
-
-self.addEventListener('install', (event) => {
+self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(
-        STATIC_ASSETS.map((asset) => new Request(asset, { cache: 'reload' }))
-      );
+    caches.open(CACHE_NAME).then(cache => {
+      return cache.addAll(STATIC_ASSETS);
     })
   );
 
   self.skipWaiting();
 });
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil((async () => {
-    const keys = await caches.keys();
-
-    await Promise.all(
-      keys.map((key) => {
-        if (key !== CACHE_NAME) {
-          return caches.delete(key);
-        }
-        return Promise.resolve();
-      })
-    );
-
-    await self.clients.claim();
-
-    const clients = await self.clients.matchAll({
-      type: 'window',
-      includeUncontrolled: true
-    });
-
-    clients.forEach((client) => {
-      client.postMessage({ type: 'APP_UPDATED', cacheName: CACHE_NAME });
-    });
-  })());
-});
-
-self.addEventListener('message', (event) => {
-  if (event.data?.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-});
-
-self.addEventListener('fetch', (event) => {
-  const request = event.request;
-
-  if (request.method !== 'GET') return;
-
-  const url = new URL(request.url);
-  const isApiRequest = API_PATHS.some((path) => url.pathname.includes(path));
-
-  if (isApiRequest) {
-    event.respondWith(networkFirst(request));
-    return;
-  }
-
-  if (request.mode === 'navigate') {
-    event.respondWith(networkFirst(request, '/index.html'));
-    return;
-  }
-
-  if (isStaticAsset(url)) {
-    event.respondWith(staleWhileRevalidate(request));
-    return;
-  }
-
-  event.respondWith(cacheFirst(request));
-});
-
-function isStaticAsset(url) {
-  return (
-    url.origin === self.location.origin &&
-    (url.pathname.endsWith('.css') ||
-      url.pathname.endsWith('.js') ||
-      url.pathname.endsWith('.json') ||
-      url.pathname.endsWith('.png') ||
-      url.pathname.endsWith('.jpg') ||
-      url.pathname.endsWith('.jpeg') ||
-      url.pathname.endsWith('.webp') ||
-      url.pathname.endsWith('.svg') ||
-      url.pathname.endsWith('.ico'))
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(
+        keys.map(key => {
+          if (key !== CACHE_NAME) {
+            return caches.delete(key);
+          }
+        })
+      )
+    )
   );
-}
+
+  self.clients.claim();
+});
+
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+
+  // API — network first
+  if (
+    url.pathname.includes("/api/substitutions") ||
+    url.pathname.includes("/api/news") ||
+    url.pathname.includes("/api/plan") ||
+    url.pathname.includes("/api/classes") ||
+    url.pathname.includes("/api/departures")
+  ) {
+    event.respondWith(networkFirst(event.request));
+    return;
+  }
+
+  // Reszta — cache first
+  event.respondWith(cacheFirst(event.request));
+});
 
 async function cacheFirst(request) {
   const cached = await caches.match(request);
 
-  if (cached) return cached;
+  if (cached) {
+    return cached;
+  }
 
   try {
     const response = await fetch(request);
 
-    if (response && response.ok) {
-      const cache = await caches.open(CACHE_NAME);
-      cache.put(request, response.clone());
-    }
+    const cache = await caches.open(CACHE_NAME);
+    cache.put(request, response.clone());
 
     return response;
   } catch {
-    return caches.match('/index.html');
+    return caches.match("/index.html");
   }
 }
 
-async function staleWhileRevalidate(request) {
-  const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
-
-  const fresh = fetch(request, { cache: 'no-store' })
-    .then((response) => {
-      if (response && response.ok) {
-        cache.put(request, response.clone());
-      }
-      return response;
-    })
-    .catch(() => null);
-
-  return cached || fresh || caches.match('/index.html');
-}
-
-async function networkFirst(request, fallbackUrl = null) {
+async function networkFirst(request) {
   try {
-    const response = await fetch(request, { cache: 'no-store' });
+    const response = await fetch(request);
 
-    if (response && response.ok) {
-      const cache = await caches.open(CACHE_NAME);
-      cache.put(request, response.clone());
-    }
+    const cache = await caches.open(CACHE_NAME);
+    cache.put(request, response.clone());
 
     return response;
   } catch {
     const cached = await caches.match(request);
 
-    if (cached) return cached;
-
-    if (fallbackUrl) {
-      const fallback = await caches.match(fallbackUrl);
-      if (fallback) return fallback;
+    if (cached) {
+      return cached;
     }
 
     return new Response(
-      JSON.stringify({ offline: true }),
+      JSON.stringify({
+        offline: true
+      }),
       {
-        status: 503,
         headers: {
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-store'
+          "Content-Type": "application/json"
         }
       }
     );
   }
 }
+
+self.addEventListener("push", (event) => {
+  let payload = {};
+
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch {
+    payload = {
+      body: event.data ? event.data.text() : "Masz nowe powiadomienie z Rolbudy."
+    };
+  }
+
+  const title = payload.title || "Rolbuda";
+  const options = {
+    body: payload.body || "Sprawdź najnowsze informacje w aplikacji.",
+    icon: payload.icon || "/assets/icon-192.png",
+    badge: payload.badge || "/assets/favicon.png",
+    tag: payload.tag || "rolbuda-update",
+    renotify: Boolean(payload.renotify),
+    requireInteraction: Boolean(payload.requireInteraction),
+    data: {
+      url: payload.url || "/"
+    }
+  };
+
+  if (Array.isArray(payload.actions) && payload.actions.length) {
+    options.actions = payload.actions.slice(0, 2);
+  }
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+
+  const targetUrl = new URL(event.notification?.data?.url || "/", self.location.origin).href;
+
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.startsWith(self.location.origin) && "focus" in client) {
+          client.navigate(targetUrl);
+          return client.focus();
+        }
+      }
+
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(targetUrl);
+      }
+    })
+  );
+});
