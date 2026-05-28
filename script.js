@@ -694,7 +694,8 @@ function normalizeSubType(entry) {
   if (
     raw.includes('przeniesienie') ||
     raw.includes('przeniesiona') ||
-    raw.includes('przeniesie')
+    raw.includes('przeniesie') ||
+    raw.includes(' z lek')
   ) {
     return 'moved';
   }
@@ -768,53 +769,6 @@ function getTeacherGroups(data) {
 
 function getAllNormalizedEntries(data) {
   return getTeacherGroups(data).flatMap(group => group.entries);
-}
-
-function extractTeacherNamesFromText(text) {
-  const source = String(text || '')
-    .replace(/\s+/g, ' ')
-    .replace(/\blek\.?\s*[\d,\-\si]+\s*-\s*/gi, ' ')
-    .replace(/\bl\.\s*\d+/gi, ' ')
-    .trim();
-
-  const matches = [...source.matchAll(/\b[A-ZĄĆĘŁŃÓŚŹŻ\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?/gu)];
-
-  return [...new Set(matches.map(match => cleanTeacherName(match[0])))] ;
-}
-
-function getAbsentTeachers(data) {
-  if (Array.isArray(data?.absentTeachers) && data.absentTeachers.length) {
-    return [...new Set(data.absentTeachers.map(cleanTeacherName).filter(Boolean))];
-  }
-
-  const general = Array.isArray(data?.general) ? data.general : [];
-  const chunks = [];
-  let collecting = false;
-
-  for (const entry of general) {
-    const raw = String(entry?.raw || entry?.summary || '').trim();
-
-    if (!raw) continue;
-
-    if (/^nauczyciele\s+nieobecni\s*:/i.test(raw)) {
-      collecting = true;
-      chunks.push(raw.replace(/^nauczyciele\s+nieobecni\s*:/i, ''));
-      continue;
-    }
-
-    if (!collecting) continue;
-
-    if (/^(?:praktyki|nauczyciele\s+zaangażowani|[•]|projekt|wycieczka|warsztaty|olimpiada)\b/i.test(raw)) {
-      break;
-    }
-
-    chunks.push(raw);
-  }
-
-  const parsed = extractTeacherNamesFromText(chunks.join(' '));
-  if (parsed.length) return parsed;
-
-  return [...new Set(getTeacherGroups(data).map(g => cleanTeacherName(g.teacher)).filter(Boolean))];
 }
 
 function normalizeDedupText(text) {
@@ -1039,31 +993,90 @@ function bindSubEntriesToggle() {
   });
 }
 
+function formatLessonRange(lessons) {
+  if (!Array.isArray(lessons) || !lessons.length) return 'bez lekcji';
 
-function getFirstLesson(entry) {
-  const lessons = Array.isArray(entry?.lessons) ? entry.lessons : [];
-  const nums = lessons
+  const sorted = [...new Set(lessons)]
     .map(Number)
     .filter(n => !Number.isNaN(n))
     .sort((a, b) => a - b);
 
-  return nums.length ? nums[0] : 999;
+  if (!sorted.length) return 'bez lekcji';
+
+  const ranges = [];
+  let start = sorted[0];
+  let prev = sorted[0];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const n = sorted[i];
+
+    if (n === prev + 1) {
+      prev = n;
+      continue;
+    }
+
+    ranges.push(start === prev ? `${start}` : `${start}-${prev}`);
+    start = prev = n;
+  }
+
+  ranges.push(start === prev ? `${start}` : `${start}-${prev}`);
+
+  return `lek. ${ranges.join(', ')}`;
 }
 
-function sortSubEntries(entries) {
-  return [...entries].sort((a, b) => {
-    const classA = String(a?.className || a?.classes?.[0] || '');
-    const classB = String(b?.className || b?.classes?.[0] || '');
-    const byClass = sortClassNames(classA, classB);
-
-    if (byClass !== 0) return byClass;
-
-    const byLesson = getFirstLesson(a) - getFirstLesson(b);
-    if (byLesson !== 0) return byLesson;
-
-    return String(a?.teacher || '').localeCompare(String(b?.teacher || ''), 'pl');
-  });
+function typeLabel(type) {
+  if (type === 'cancelled') return 'Odwołane';
+  if (type === 'moved') return 'Przeniesione';
+  return 'Zastępstwo';
 }
+
+function typeClass(type) {
+  if (type === 'cancelled') return 'cancelled';
+  if (type === 'moved') return 'moved';
+  if (type === 'substitution') return 'substitution';
+  return '';
+}
+
+function changeWord(n) {
+  if (n === 1) return 'zmianę';
+  return 'zmiany';
+}
+
+function teacherWord(n) {
+  if (n === 1) return 'nauczyciel';
+  return 'nauczycieli';
+}
+
+function buildSummary(data, saved) {
+  if (!saved?.name) {
+    return 'Wybierz klasę — wtedy zrobię analizę specjalnie dla Ciebie.';
+  }
+
+  const availableClasses = getClassesWithSubstitutions(data);
+  const selectedClasses = getSelectedSubClasses(saved, availableClasses);
+  const entries = collectEntriesForSelectedClasses(data, selectedClasses);
+
+  const teacherGroups = getTeacherGroups(data);
+  const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
+
+  if (!entries.length) {
+    return `Stety lub niestety dla ${saved.name} — brak zastępstw, współczuję.`;
+  }
+
+  const cancelled = entries.filter(e => e.type === 'cancelled').length;
+  const moved = entries.filter(e => e.type === 'moved').length;
+
+  if (cancelled >= 3) {
+    return `🔥 Dużo odwołań (${cancelled}) — możliwe luzy dla wybranych klas`;
+  }
+
+  if (moved >= 3) {
+    return `⚠️ Sporo zmian sal/godzin — uważaj na plan`;
+  }
+
+  return `${entries.length} zmian · ${absentTeachers.length} nauczycieli nieobecnych`;
+}
+
 
 function getEntryClassName(entry) {
   return String(entry?.className || entry?.classes?.[0] || '—').replace(/\s+/g, '');
@@ -1153,98 +1166,11 @@ function formatSubEntryDescription(entry) {
     return `${className} ${lesson} zastępstwo z ${replacementTeacher}${sourceLesson ? ` (${sourceLesson})` : ''}`;
   }
 
-  if (entry?.type === 'moved') {
-    if (replacementTeacher) {
-      return `${className} ${lesson} przeniesione / zastępstwo z ${replacementTeacher}${sourceLesson ? ` (${sourceLesson})` : ''}`;
-    }
-
-    return raw || `${className} ${lesson} przeniesione`;
+  if (entry?.type === 'moved' && sourceLesson) {
+    return `${className} ${lesson} przeniesiona (${sourceLesson})`;
   }
 
   return raw || `${className} ${lesson}`;
-}
-
-function formatLessonRange(lessons) {
-  if (!Array.isArray(lessons) || !lessons.length) return 'nieznana lekcja';
-
-  const sorted = [...new Set(lessons)]
-    .map(Number)
-    .filter(n => !Number.isNaN(n))
-    .sort((a, b) => a - b);
-
-  if (!sorted.length) return 'nieznana lekcja';
-
-  const ranges = [];
-  let start = sorted[0];
-  let prev = sorted[0];
-
-  for (let i = 1; i < sorted.length; i++) {
-    const n = sorted[i];
-
-    if (n === prev + 1) {
-      prev = n;
-      continue;
-    }
-
-    ranges.push(start === prev ? `${start}` : `${start}-${prev}`);
-    start = prev = n;
-  }
-
-  ranges.push(start === prev ? `${start}` : `${start}-${prev}`);
-
-  return `lek. ${ranges.join(', ')}`;
-}
-
-function typeLabel(type) {
-  if (type === 'cancelled') return 'Odwołane';
-  if (type === 'moved') return 'Przeniesione';
-  return 'Zastępstwo';
-}
-
-function typeClass(type) {
-  if (type === 'cancelled') return 'cancelled';
-  if (type === 'moved') return 'moved';
-  if (type === 'substitution') return 'substitution';
-  return '';
-}
-
-function changeWord(n) {
-  if (n === 1) return 'zmianę';
-  return 'zmiany';
-}
-
-function teacherWord(n) {
-  if (n === 1) return 'nauczyciel';
-  return 'nauczycieli';
-}
-
-function buildSummary(data, saved) {
-  if (!saved?.name) {
-    return 'Wybierz klasę — wtedy zrobię analizę specjalnie dla Ciebie.';
-  }
-
-  const availableClasses = getClassesWithSubstitutions(data);
-  const selectedClasses = getSelectedSubClasses(saved, availableClasses);
-  const entries = sortSubEntries(collectEntriesForSelectedClasses(data, selectedClasses));
-
-  const absentTeachers = getAbsentTeachers(data);
-
-  if (!entries.length) {
-    return `Stety lub niestety dla ${saved.name} — brak zastępstw, współczuję.`;
-  }
-
-  const cancelled = entries.filter(e => e.type === 'cancelled').length;
-  const moved = entries.filter(e => e.type === 'moved').length;
-
-  if (cancelled >= 3) {
-    return `🔥 Dużo odwołań (${cancelled}) — możliwe luzy dla wybranych klas`;
-  }
-
-  if (moved >= 3) {
-    return `⚠️ Sporo zmian sal/godzin — uważaj na plan`;
-  }
-
-  return `${entries.length} zmian · ${absentTeachers.length} nauczycieli nieobecnych`;
 }
 
 function summarizePersonal(entries) {
@@ -1342,9 +1268,10 @@ function renderSubstitutions(data) {
 
   const availableClasses = getClassesWithSubstitutions(data);
   const selectedClasses = getSelectedSubClasses(saved, availableClasses);
-  const selectedEntries = sortSubEntries(collectEntriesForSelectedClasses(data, selectedClasses));
+  const selectedEntries = collectEntriesForSelectedClasses(data, selectedClasses);
 
-  const absentTeachers = getAbsentTeachers(data);
+  const teacherGroups = getTeacherGroups(data);
+  const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
 
   if (subDate) {
     subDate.textContent =
@@ -1418,7 +1345,6 @@ async function loadSubstitutions() {
       ...data,
       general: Array.isArray(data.general) ? data.general : [],
       teachers: Array.isArray(data.teachers) ? data.teachers : [],
-      absentTeachers: Array.isArray(data.absentTeachers) ? data.absentTeachers : [],
       rawText: data.rawText || ''
     };
 
