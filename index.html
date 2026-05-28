@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Rolbuda - nieformalna storna szkolna</title>
+  <title>Rolbuda - nieformalna strona szkolna</title>
   <meta name="description" content="Nowoczesna strona Powiatowego Zespołu Szkół nr 2 im. Karola Miarki w Pszczynie." />
   <link rel="stylesheet" href="style.css" />
   <script src="script.js" defer></script>
@@ -265,6 +265,33 @@
       <div>Fanowski projekt dwóch delikwentów z 3Ti.</div>
     </div>
   </footer>
+
+  <div id="notificationPrompt" class="notification-prompt hidden" role="dialog" aria-modal="true" aria-labelledby="notificationPromptTitle" aria-describedby="notificationPromptDesc">
+    <div class="notification-prompt-card">
+      <div class="notification-prompt-top">
+        <img src="assets/icon-192.png" alt="" class="notification-prompt-icon">
+        <div>
+          <strong id="notificationPromptTitle">Rolbuda</strong>
+          <span>Powiadomienia z aplikacji</span>
+        </div>
+      </div>
+      <p id="notificationPromptDesc">Włącz delikatne powiadomienia o ważnych zmianach, np. nowych zastępstwach dla Twojej klasy.</p>
+      <div class="notification-prompt-preview" aria-hidden="true">
+        <div class="notification-preview-dot"></div>
+        <div>
+          <strong>Nowe zastępstwa</strong>
+          <span>Sprawdź zmiany dla swojej klasy.</span>
+        </div>
+        <small>teraz</small>
+      </div>
+      <div class="notification-prompt-actions">
+        <button id="notificationLater" class="notification-btn notification-btn-ghost" type="button">Nie teraz</button>
+        <button id="notificationAllow" class="notification-btn notification-btn-primary" type="button">Zezwól</button>
+      </div>
+      <span id="notificationHint" class="notification-hint" aria-live="polite"></span>
+    </div>
+  </div>
+
   <div id="classModal" class="modal hidden">
   <div class="modal-box">
     <h2>Wybierz swoją klasę</h2>
