@@ -1116,6 +1116,104 @@ function getSourceLessonNote(entry) {
   return '';
 }
 
+
+function getSubWeekdayName() {
+  const label = String(SUB_DATA?.dateLabel || subDate?.textContent || '').toLowerCase();
+  return ['poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek']
+    .find(day => label.includes(day)) || '';
+}
+
+function getPlanRowsForTeacherLookup() {
+  const rows = CURRENT_PLAN_DATA?.rows;
+
+  if (!Array.isArray(rows) || !rows.length) return [];
+
+  return rows.filter(row => Array.isArray(row) && row.length && !isNoiseRow(row));
+}
+
+function getPlanDayColumnIndex(rows, weekday) {
+  if (!rows.length || !weekday) return -1;
+
+  const header = rows[0] || [];
+  const directIndex = header.findIndex(cell => {
+    return normalizeCell(cell).join(' ').toLowerCase().includes(weekday);
+  });
+
+  if (directIndex >= 0) return directIndex;
+
+  const fallback = {
+    'poniedziałek': 2,
+    'wtorek': 3,
+    'środa': 4,
+    'czwartek': 5,
+    'piątek': 6,
+  };
+
+  return fallback[weekday] ?? -1;
+}
+
+function getLessonNumberFromPlanRow(row, index) {
+  const firstCell = normalizeCell(row?.[0]).join(' ');
+  const match = firstCell.match(/\b(\d{1,2})\b/);
+
+  if (match) return Number(match[1]);
+
+  return index + 1;
+}
+
+function extractTeacherNamesFromPlanCell(cell) {
+  const text = normalizeCell(cell).join(' ');
+
+  const matches = [...text.matchAll(
+    /\b[A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?/gu
+  )];
+
+  return [...new Set(matches.map(match => cleanTeacherName(match[0])).filter(Boolean))];
+}
+
+function getPlanTeachersForEntry(entry) {
+  const savedClassKey = normalizeClassName(CURRENT_CLASS_NAME);
+  const entryClassKeys = getEntryClasses(entry).map(normalizeClassName);
+
+  if (!savedClassKey || !entryClassKeys.includes(savedClassKey)) return [];
+
+  const lessons = Array.isArray(entry?.lessons)
+    ? [...new Set(entry.lessons.map(Number).filter(n => !Number.isNaN(n)))]
+    : [];
+
+  if (!lessons.length) return [];
+
+  const rows = getPlanRowsForTeacherLookup();
+  const weekday = getSubWeekdayName();
+  const dayIndex = getPlanDayColumnIndex(rows, weekday);
+
+  if (!rows.length || dayIndex < 0) return [];
+
+  const bodyRows = rows.slice(1);
+  const teachers = [];
+
+  bodyRows.forEach((row, index) => {
+    const lessonNumber = getLessonNumberFromPlanRow(row, index);
+
+    if (!lessons.includes(lessonNumber)) return;
+
+    teachers.push(...extractTeacherNamesFromPlanCell(row[dayIndex]));
+  });
+
+  return [...new Set(teachers)];
+}
+
+function getDisplayTeacherForEntry(entry) {
+  const apiTeacher = cleanTeacherName(entry?.teacher);
+  const plannedTeachers = getPlanTeachersForEntry(entry);
+
+  if (normalizeSubType(entry) === 'cancelled' && plannedTeachers.length) {
+    return plannedTeachers.join(', ');
+  }
+
+  return apiTeacher;
+}
+
 function getReplacementTeacher(entry) {
   const raw = String(entry?.raw || entry?.summary || '');
   const withoutPrefix = stripEntryPrefix(raw);
@@ -1140,9 +1238,9 @@ function getReplacementTeacher(entry) {
 function formatSubEntryTitle(entry) {
   const className = getEntryClassName(entry);
   const lesson = formatLessonRange(entry?.lessons);
-  const replacedTeacher = cleanTeacherName(entry?.teacher);
+  const displayTeacher = getDisplayTeacherForEntry(entry);
 
-  return [className, lesson, replacedTeacher]
+  return [className, lesson, displayTeacher]
     .filter(Boolean)
     .join(' · ');
 }
@@ -1634,6 +1732,10 @@ async function loadPlan(classId, className) {
     CURRENT_CLASS_NAME = className;
 
     renderPlan();
+
+    if (SUB_DATA && (Array.isArray(SUB_DATA.general) || Array.isArray(SUB_DATA.teachers))) {
+      renderSubstitutions(SUB_DATA);
+    }
 
     if (planStatus) {
       planStatus.textContent = `Wczytano: ${className}`;
