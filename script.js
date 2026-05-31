@@ -1116,104 +1116,6 @@ function getSourceLessonNote(entry) {
   return '';
 }
 
-
-function getSubWeekdayName() {
-  const label = String(SUB_DATA?.dateLabel || subDate?.textContent || '').toLowerCase();
-  return ['poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek']
-    .find(day => label.includes(day)) || '';
-}
-
-function getPlanRowsForTeacherLookup() {
-  const rows = CURRENT_PLAN_DATA?.rows;
-
-  if (!Array.isArray(rows) || !rows.length) return [];
-
-  return rows.filter(row => Array.isArray(row) && row.length && !isNoiseRow(row));
-}
-
-function getPlanDayColumnIndex(rows, weekday) {
-  if (!rows.length || !weekday) return -1;
-
-  const header = rows[0] || [];
-  const directIndex = header.findIndex(cell => {
-    return normalizeCell(cell).join(' ').toLowerCase().includes(weekday);
-  });
-
-  if (directIndex >= 0) return directIndex;
-
-  const fallback = {
-    'poniedziałek': 2,
-    'wtorek': 3,
-    'środa': 4,
-    'czwartek': 5,
-    'piątek': 6,
-  };
-
-  return fallback[weekday] ?? -1;
-}
-
-function getLessonNumberFromPlanRow(row, index) {
-  const firstCell = normalizeCell(row?.[0]).join(' ');
-  const match = firstCell.match(/\b(\d{1,2})\b/);
-
-  if (match) return Number(match[1]);
-
-  return index + 1;
-}
-
-function extractTeacherNamesFromPlanCell(cell) {
-  const text = normalizeCell(cell).join(' ');
-
-  const matches = [...text.matchAll(
-    /\b[A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?/gu
-  )];
-
-  return [...new Set(matches.map(match => cleanTeacherName(match[0])).filter(Boolean))];
-}
-
-function getPlanTeachersForEntry(entry) {
-  const savedClassKey = normalizeClassName(CURRENT_CLASS_NAME);
-  const entryClassKeys = getEntryClasses(entry).map(normalizeClassName);
-
-  if (!savedClassKey || !entryClassKeys.includes(savedClassKey)) return [];
-
-  const lessons = Array.isArray(entry?.lessons)
-    ? [...new Set(entry.lessons.map(Number).filter(n => !Number.isNaN(n)))]
-    : [];
-
-  if (!lessons.length) return [];
-
-  const rows = getPlanRowsForTeacherLookup();
-  const weekday = getSubWeekdayName();
-  const dayIndex = getPlanDayColumnIndex(rows, weekday);
-
-  if (!rows.length || dayIndex < 0) return [];
-
-  const bodyRows = rows.slice(1);
-  const teachers = [];
-
-  bodyRows.forEach((row, index) => {
-    const lessonNumber = getLessonNumberFromPlanRow(row, index);
-
-    if (!lessons.includes(lessonNumber)) return;
-
-    teachers.push(...extractTeacherNamesFromPlanCell(row[dayIndex]));
-  });
-
-  return [...new Set(teachers)];
-}
-
-function getDisplayTeacherForEntry(entry) {
-  const apiTeacher = cleanTeacherName(entry?.teacher);
-  const plannedTeachers = getPlanTeachersForEntry(entry);
-
-  if (normalizeSubType(entry) === 'cancelled' && plannedTeachers.length) {
-    return plannedTeachers.join(', ');
-  }
-
-  return apiTeacher;
-}
-
 function getReplacementTeacher(entry) {
   const raw = String(entry?.raw || entry?.summary || '');
   const withoutPrefix = stripEntryPrefix(raw);
@@ -1233,6 +1135,150 @@ function getReplacementTeacher(entry) {
       .replace(/\blek\.?\s*z\s*\d{1,2}-\d{2}(?:\s*l\.?\s*\d+)?/giu, '')
       .trim()
   );
+}
+
+function getCleanPlanRows() {
+  const rows = Array.isArray(CURRENT_PLAN_DATA?.rows)
+    ? CURRENT_PLAN_DATA.rows.filter(row => Array.isArray(row) && row.length && !isNoiseRow(row))
+    : [];
+
+  return rows;
+}
+
+function getSubWeekdayName() {
+  const source = String(SUB_DATA?.dateLabel || SUB_DATA?.general?.[0]?.raw || SUB_DATA?.general?.[0]?.summary || '');
+  const match = source.match(/poniedziałek|wtorek|środa|czwartek|piątek|sobota|niedziela/i);
+
+  if (match) return match[0].toLowerCase();
+
+  const today = new Date().getDay();
+  return [
+    'niedziela',
+    'poniedziałek',
+    'wtorek',
+    'środa',
+    'czwartek',
+    'piątek',
+    'sobota'
+  ][today] || '';
+}
+
+function getPlanDayColumnIndex(rows, weekday) {
+  const header = rows[0] || [];
+  const wanted = String(weekday || '').toLowerCase();
+
+  if (!wanted) return -1;
+
+  const direct = header.findIndex(cell => {
+    return normalizeCell(cell).join(' ').toLowerCase().includes(wanted);
+  });
+
+  if (direct >= 0) return direct;
+
+  const fallback = {
+    'poniedziałek': 2,
+    'wtorek': 3,
+    'środa': 4,
+    'czwartek': 5,
+    'piątek': 6
+  };
+
+  return fallback[wanted] ?? -1;
+}
+
+function getLessonNumberFromPlanRow(row) {
+  const firstCell = normalizeCell(row?.[0]).join(' ');
+  const direct = firstCell.match(/\b(\d{1,2})\b/);
+
+  if (direct) return Number(direct[1]);
+
+  const wholeRow = Array.isArray(row)
+    ? row.flatMap(cell => normalizeCell(cell)).join(' ')
+    : '';
+  const fallback = wholeRow.match(/\b(\d{1,2})\b/);
+
+  return fallback ? Number(fallback[1]) : null;
+}
+
+function getPlanCellLinesForCurrentGroup(cell) {
+  const lines = normalizeCell(cell);
+
+  return lines.filter(line => {
+    const lower = line.toLowerCase();
+
+    if (!lower.includes('1/2') && !lower.includes('2/2')) return true;
+    if (CURRENT_GROUP === 'all') return true;
+    if (CURRENT_GROUP === '1' && lower.includes('1/2')) return true;
+    if (CURRENT_GROUP === '2' && lower.includes('2/2')) return true;
+
+    return false;
+  });
+}
+
+function extractTeacherNamesFromPlanCell(cell) {
+  const text = getPlanCellLinesForCurrentGroup(cell)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text) return [];
+
+  const matches = [...text.matchAll(/\b[A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s+[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?/gu)];
+
+  return [...new Set(matches.map(match => cleanTeacherName(match[0])).filter(Boolean))];
+}
+
+function getPlanTeachersForEntry(entry) {
+  if (!CURRENT_PLAN_DATA || !CURRENT_CLASS_NAME) return [];
+
+  const entryClassKey = normalizeClassName(getEntryClassName(entry));
+  const currentClassKey = normalizeClassName(CURRENT_CLASS_NAME);
+
+  if (!entryClassKey || entryClassKey !== currentClassKey) return [];
+
+  const lessons = Array.isArray(entry?.lessons)
+    ? [...new Set(entry.lessons.map(Number).filter(n => !Number.isNaN(n)))]
+    : [];
+
+  if (!lessons.length) return [];
+
+  const rows = getCleanPlanRows();
+  if (rows.length < 2) return [];
+
+  const dayColumn = getPlanDayColumnIndex(rows, getSubWeekdayName());
+  if (dayColumn < 0) return [];
+
+  const teachers = [];
+
+  rows.slice(1).forEach(row => {
+    const lessonNumber = getLessonNumberFromPlanRow(row);
+
+    if (!lessons.includes(lessonNumber)) return;
+
+    extractTeacherNamesFromPlanCell(row[dayColumn]).forEach(name => {
+      if (name && !teachers.includes(name)) teachers.push(name);
+    });
+  });
+
+  return teachers;
+}
+
+function shouldPreferPlanTeacher(entry) {
+  const type = normalizeSubType(entry);
+
+  // Przy odwołanych lekcjach nauczyciel z PDF bywa błędnie przypisany przez kolejność tekstu z pdf-parse.
+  // Plan lekcji klasy jest wtedy stabilniejszym źródłem informacji o tym, kto faktycznie miał tę lekcję.
+  return type === 'cancelled';
+}
+
+function getDisplayTeacherForEntry(entry) {
+  if (shouldPreferPlanTeacher(entry)) {
+    const planTeachers = getPlanTeachersForEntry(entry);
+
+    if (planTeachers.length) return planTeachers.join(', ');
+  }
+
+  return cleanTeacherName(entry?.teacher);
 }
 
 function formatSubEntryTitle(entry) {
@@ -1733,7 +1779,9 @@ async function loadPlan(classId, className) {
 
     renderPlan();
 
-    if (SUB_DATA && (Array.isArray(SUB_DATA.general) || Array.isArray(SUB_DATA.teachers))) {
+    // Plan ładuje się niezależnie od zastępstw. Po jego wczytaniu przeliczamy zastępstwa,
+    // żeby odwołane lekcje mogły pokazać nauczyciela z planu klasy zamiast błędnej grupy z PDF.
+    if (SUB_DATA && (SUB_DATA.general?.length || SUB_DATA.teachers?.length)) {
       renderSubstitutions(SUB_DATA);
     }
 
