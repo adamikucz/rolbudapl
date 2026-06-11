@@ -640,7 +640,7 @@ function extractClassesFromText(text) {
   const value = String(text || '');
 
   const matches = [...value.matchAll(
-    /\b([1-5])\s*(LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\b/gi
+    /\b([1-5])\s*(LO[a-d]?|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?)\b/giu
   )];
 
   return matches.map(match => {
@@ -765,6 +765,75 @@ function getTeacherGroups(data) {
     teacher: group.teacher || '—',
     entries: (group.entries || []).map(entry => normalizeSubEntry(entry, group.teacher))
   }));
+}
+
+function splitTeacherList(text) {
+  return String(text || '')
+    .split(',')
+    .map(part => cleanTeacherName(part).replace(/[,.]+$/g, '').trim())
+    .filter(Boolean)
+    .filter(part => /^[A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s+[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?$/u.test(part));
+}
+
+function extractDeclaredAbsentTeachersFromLines(lines) {
+  const chunks = [];
+  let collecting = false;
+
+  lines.forEach(line => {
+    if (collecting === 'done') return;
+
+    const text = String(line || '').replace(/\s+/g, ' ').trim();
+    if (!text) return;
+
+    if (/^nauczyciele\s+nieobecni\s*:/i.test(text)) {
+      collecting = true;
+      chunks.push(text.replace(/^nauczyciele\s+nieobecni\s*:/i, ''));
+      return;
+    }
+
+    if (!collecting) return;
+
+    if (/^(?:[•●◦▪▫‣⁃\-–—\uF0B7]\s*|praktyki|nauczyciele\s+zaangażowani|wyłączone|szkolenie|zajęcia|egzaminy|projekt|wycieczka|warsztaty|olimpiada)\b/i.test(text)) {
+      collecting = 'done';
+      return;
+    }
+
+    if (isTeacherLine(text) || (/\b(?:lek|le|l)\.?\s*\d/i.test(text) && extractClassesFromText(text).length)) {
+      collecting = 'done';
+      return;
+    }
+
+    chunks.push(text);
+  });
+
+  return [...new Set(splitTeacherList(chunks.join(' ')))];
+}
+
+function getAbsentTeachers(data) {
+  const rawLines = String(data?.rawText || '')
+    .replace(/\r/g, '\n')
+    .split('\n');
+
+  const fromRawText = extractDeclaredAbsentTeachersFromLines(rawLines);
+  if (fromRawText.length) return fromRawText;
+
+  const generalLines = Array.isArray(data?.general)
+    ? data.general.map(entry => entry?.raw || entry?.summary || '')
+    : [];
+
+  const fromGeneral = extractDeclaredAbsentTeachersFromLines(generalLines);
+  if (fromGeneral.length) return fromGeneral;
+
+  const fromApi = Array.isArray(data?.absentTeachers)
+    ? data.absentTeachers.map(cleanTeacherName).filter(Boolean)
+    : [];
+
+  if (fromApi.length) return [...new Set(fromApi)];
+
+  return [...new Set(getTeacherGroups(data)
+    .map(group => cleanTeacherName(group.teacher))
+    .filter(Boolean)
+  )];
 }
 
 function getAllNormalizedEntries(data) {
@@ -1056,8 +1125,7 @@ function buildSummary(data, saved) {
   const selectedClasses = getSelectedSubClasses(saved, availableClasses);
   const entries = collectEntriesForSelectedClasses(data, selectedClasses);
 
-  const teacherGroups = getTeacherGroups(data);
-  const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
+  const absentTeachers = getAbsentTeachers(data);
 
   if (!entries.length) {
     return `Stety lub niestety dla ${saved.name} — brak zastępstw, współczuję.`;
@@ -1092,7 +1160,7 @@ function cleanTeacherName(value) {
 
 function stripEntryPrefix(raw) {
   return String(raw || '')
-    .replace(/^\s*[1-5]\s*(?:LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\s*/iu, '')
+    .replace(/^\s*[1-5]\s*(?:LO[a-d]?|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?)\s*/iu, '')
     .replace(/^\s*(?:lek|le|l)\.?\s*\d+(?:\s*[-,i]\s*\d+)*\s*/iu, '')
     .trim();
 }
@@ -1414,8 +1482,7 @@ function renderSubstitutions(data) {
   const selectedClasses = getSelectedSubClasses(saved, availableClasses);
   const selectedEntries = collectEntriesForSelectedClasses(data, selectedClasses);
 
-  const teacherGroups = getTeacherGroups(data);
-  const absentTeachers = [...new Set(teacherGroups.map(g => g.teacher).filter(Boolean))];
+  const absentTeachers = getAbsentTeachers(data);
 
   if (subDate) {
     subDate.textContent =
@@ -1489,7 +1556,8 @@ async function loadSubstitutions() {
       ...data,
       general: Array.isArray(data.general) ? data.general : [],
       teachers: Array.isArray(data.teachers) ? data.teachers : [],
-      rawText: data.rawText || ''
+      rawText: data.rawText || '',
+      absentTeachers: Array.isArray(data.absentTeachers) ? data.absentTeachers : []
     };
 
     SUB_FILTER_OPEN = false;
