@@ -27,6 +27,15 @@ const notificationHint = document.getElementById('notificationHint');
 const USER_CLASS_KEY = 'pzs2_user_class';
 const EXTRA_SUB_CLASSES_KEY = 'pzs2_extra_sub_classes';
 
+// Wybór klasy jest przypisany do roku szkolnego, dzięki czemu po wakacjach
+// użytkownik musi ponownie wskazać aktualną klasę zamiast korzystać ze starego cache.
+const getCurrentSchoolYear = () => {
+  const now = new Date();
+  const startYear = now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+  return `${startYear}-${startYear + 1}`;
+};
+const CURRENT_SCHOOL_YEAR = getCurrentSchoolYear();
+
 const newsContainer = document.querySelector('.announcement-list');
 const newsToggle = document.getElementById('newsToggle');
 const announcementList = document.querySelector('.announcement-list');
@@ -91,7 +100,10 @@ function getSavedClass() {
 }
 
 function saveClass(cls) {
-  localStorage.setItem(USER_CLASS_KEY, JSON.stringify(cls));
+  localStorage.setItem(USER_CLASS_KEY, JSON.stringify({
+    ...cls,
+    selectionVersion: CURRENT_SCHOOL_YEAR
+  }));
 }
 
 function normalizeCell(cell) {
@@ -1675,14 +1687,20 @@ async function loadClasses() {
     renderClassButtons(CLASSES);
 
     const saved = getSavedClass();
+    const savedClassIsCurrent = saved?.selectionVersion === CURRENT_SCHOOL_YEAR;
 
-    if (saved) {
+    if (saved && savedClassIsCurrent) {
       loadPlan(saved.id, saved.name);
 
       if (planStatus) {
         planStatus.textContent = `Twoja klasa: ${saved.name}`;
       }
     } else {
+      // Stary wybór klasy (np. z poprzedniego roku szkolnego) nie jest już ważny.
+      if (saved) {
+        localStorage.removeItem(USER_CLASS_KEY);
+      }
+
       showClassModal(CLASSES);
 
       if (planStatus) {
