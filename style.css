@@ -1958,3 +1958,362 @@ body.dark-theme .notification-test-button {
   border-color: rgba(118,187,232,.20);
   color: var(--text);
 }
+
+/* =========================
+   PLAN LEKCJI — NOWY WIDOK
+========================= */
+
+.class-picker-wrap {
+  padding: 18px 20px 20px;
+}
+
+.class-list {
+  display: block;
+}
+
+.class-picker-label {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--muted);
+  font-size: .84rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
+.class-picker-shell {
+  position: relative;
+}
+
+.class-picker-shell select,
+#groupSelect {
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid rgba(16,32,51,.10);
+  border-radius: 17px;
+  background: var(--card-strong);
+  color: var(--text);
+  padding: 14px 44px 14px 16px;
+  outline: none;
+  box-shadow: var(--shadow-soft);
+  cursor: pointer;
+  transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
+}
+
+.class-picker-shell select:focus,
+#groupSelect:focus {
+  border-color: rgba(72,169,216,.45);
+  box-shadow: 0 0 0 4px rgba(72,169,216,.10);
+}
+
+.class-picker-chevron {
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  right: 15px;
+  transform: translateY(-56%);
+  color: var(--muted);
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.plan-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 250px);
+  gap: 14px;
+  align-items: end;
+  margin-bottom: 14px;
+  color: var(--muted);
+}
+
+.plan-meta strong {
+  color: var(--text);
+}
+
+.plan-group-control {
+  display: grid;
+  gap: 7px;
+}
+
+.plan-group-control label {
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+
+.plan-group-control #groupSelect {
+  box-shadow: none;
+}
+
+.plan-day-tabs {
+  display: none;
+
+  align-items: center;
+  gap: 7px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding: 2px 0 10px;
+  margin-bottom: 2px;
+}
+
+.plan-day-tab,
+.plan-week-view-toggle {
+  flex: 0 0 auto;
+  border: 1px solid rgba(16,32,51,.09);
+  background: rgba(255,255,255,.66);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: .2s ease;
+  box-shadow: 0 6px 18px rgba(16,32,51,.05);
+}
+
+.plan-day-tab:hover,
+.plan-week-view-toggle:hover {
+  transform: translateY(-1px);
+  color: var(--text);
+  background: rgba(72,169,216,.08);
+}
+
+.plan-day-tab.active {
+  color: var(--text);
+  background: rgba(72,169,216,.13);
+  border-color: rgba(72,169,216,.25);
+  font-weight: 700;
+}
+
+.plan-week-view-toggle {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  margin-left: 1px;
+  font-size: 1rem;
+}
+
+.plan-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: .82rem;
+}
+
+.plan-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.plan-legend-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.plan-legend-swatch.cancelled {
+  background: rgba(255,77,109,.34);
+  border: 1px solid rgba(255,77,109,.48);
+}
+
+.plan-legend-swatch.substitution {
+  background: rgba(255,193,7,.36);
+  border: 1px solid rgba(255,193,7,.54);
+}
+
+.plan-cell-content {
+  margin: -12px;
+  min-height: 56px;
+  padding: 12px;
+  border-radius: 15px;
+}
+
+.plan-cell-cancelled {
+  background: rgba(255,77,109,.16);
+  border: 1px solid rgba(255,77,109,.34);
+  color: var(--text);
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: rgba(197,35,67,.75);
+}
+
+.plan-cell-substitution {
+  background: rgba(255,193,7,.18);
+  border: 1px solid rgba(255,193,7,.36);
+  color: var(--text);
+}
+
+.lesson-line-changed {
+  font-weight: 600;
+}
+
+.plan-week-view .plan-day-header {
+  text-transform: capitalize;
+}
+
+body.dark-theme .class-picker-shell select,
+body.dark-theme #groupSelect {
+  background: rgba(12,20,33,.92);
+  border-color: rgba(234,241,255,.11);
+  color: var(--text);
+}
+
+body.dark-theme .plan-day-tab,
+body.dark-theme .plan-week-view-toggle {
+  background: rgba(19,29,46,.74);
+  border-color: rgba(234,241,255,.09);
+  color: var(--muted);
+}
+
+body.dark-theme .plan-day-tab.active {
+  background: rgba(72,169,216,.15);
+  border-color: rgba(72,169,216,.27);
+  color: var(--text);
+}
+
+body.dark-theme .plan-cell-cancelled {
+  background: rgba(255,64,96,.17);
+  border-color: rgba(255,80,108,.30);
+  text-decoration-color: rgba(255,120,140,.80);
+}
+
+body.dark-theme .plan-cell-substitution {
+  background: rgba(255,183,0,.15);
+  border-color: rgba(255,193,7,.28);
+}
+
+@media (max-width: 720px) {
+  .plan-meta {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .plan-day-tabs {
+    display: flex;
+    margin-right: -20px;
+    padding-right: 20px;
+  }
+
+  #planPreview {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  .timetable-day-view {
+    gap: 6px;
+    overflow-x: visible;
+  }
+
+  .timetable-day-view .timetable-row {
+    grid-template-columns: 54px 78px minmax(0, 1fr);
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .timetable-day-view .timetable-row > div {
+    border-radius: 14px;
+    padding: 10px 8px;
+    min-height: 54px;
+  }
+
+  .timetable-day-view .plan-day-header {
+    text-align: left;
+  }
+
+  .timetable-day-view .lesson-line {
+    font-size: .78rem;
+  }
+
+  .timetable-day-view .plan-cell-content {
+    margin: -10px -8px;
+    padding: 10px 8px;
+    min-height: 54px;
+  }
+
+  .timetable-day-view .empty-cell {
+    min-height: 32px;
+  }
+
+  .plan-legend {
+    padding-bottom: 3px;
+  }
+
+  body.dark-theme {
+    --bg: #080a0f;
+    --bg-2: #0d1017;
+    --card: rgba(17,20,27,.90);
+    --card-strong: rgba(20,24,32,.96);
+    --text: #f1f5fb;
+    --muted: #98a3b5;
+    --line: rgba(241,245,251,.09);
+    --shadow: 0 22px 60px rgba(0,0,0,.44);
+    --shadow-soft: 0 10px 28px rgba(0,0,0,.30);
+    background:
+      radial-gradient(circle at 12% 0%, rgba(72,169,216,.09), transparent 32%),
+      radial-gradient(circle at 90% 6%, rgba(124,92,255,.08), transparent 30%),
+      linear-gradient(180deg, #06080c 0%, #080a0f 100%);
+  }
+
+  body.dark-theme .topbar {
+    background: rgba(7,9,13,.82);
+    border-bottom-color: rgba(241,245,251,.07);
+  }
+
+  body.dark-theme .hero-bg {
+    background:
+      radial-gradient(circle at 15% 14%, rgba(72,169,216,.10), transparent 24%),
+      radial-gradient(circle at 85% 12%, rgba(124,92,255,.08), transparent 25%),
+      linear-gradient(180deg, rgba(7,9,13,.97), rgba(10,13,18,.98));
+  }
+
+  body.dark-theme .eyebrow,
+  body.dark-theme .meta-card,
+  body.dark-theme .card,
+  body.dark-theme .panel,
+  body.dark-theme .floating-badge,
+  body.dark-theme .visual-shell,
+  body.dark-theme .sub-summary-card,
+  body.dark-theme .sub-mini-item,
+  body.dark-theme .sub-class-dropdown,
+  body.dark-theme .class-chip {
+    background: rgba(17,20,27,.91);
+    border-color: rgba(241,245,251,.07);
+  }
+
+  body.dark-theme .theme-toggle {
+    background: rgba(16,19,25,.92);
+    border-color: rgba(241,245,251,.10);
+  }
+}
+
+/* [ROLBUDA-POPRAWKA 4] Podświetlenie pojedynczej pozycji w komórce planu. */
+.plan-line-cancelled {
+  background: rgba(255,77,109,.16);
+  border-radius: 9px;
+  padding: 3px 6px;
+  margin: 1px -6px;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: rgba(197,35,67,.75);
+}
+.plan-line-substitution {
+  background: rgba(255,193,7,.18);
+  border-radius: 9px;
+  padding: 3px 6px;
+  margin: 1px -6px;
+}
+body.dark-theme .plan-line-cancelled {
+  background: rgba(255,64,96,.17);
+  text-decoration-color: rgba(255,120,140,.80);
+}
+body.dark-theme .plan-line-substitution {
+  background: rgba(255,183,0,.15);
+}
