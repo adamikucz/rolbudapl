@@ -212,12 +212,18 @@
 	
 	  <div class="panel">
 		<div class="panel-header">
-		  <!-- [ROLBUDA-POPRAWKA 5] Usunięto niedziałającą wyszukiwarkę klas. -->
-		  <h3>Wybór klasy</h3>
+		  <h3>Wyszukaj klasę</h3>
 		  <span id="planStatus">Gotowe</span>
 		</div>
 
-		<div class="class-picker-wrap">
+		<div style="padding: 18px 20px; display:grid; gap:14px;">
+		  <input
+			id="classSearch"
+			type="search"
+			placeholder="Szukaj klasy..."
+			style="width:100%; padding:14px 16px; border-radius:16px; border:1px solid rgba(16,32,51,.12); background:#fff;"
+		  />
+
 		  <div id="classList" class="class-list"></div>
 		</div>
 
