@@ -41,7 +41,6 @@ const newsToggle = document.getElementById('newsToggle');
 const announcementList = document.querySelector('.announcement-list');
 
 const planStatus = document.getElementById('planStatus');
-const classSearch = document.getElementById('classSearch');
 const classList = document.getElementById('classList');
 const planPreview = document.getElementById('planPreview');
 
@@ -57,9 +56,11 @@ let SUB_FILTER_OPEN = false;
 let SUB_SHOW_ALL_ENTRIES = false;
 let EXTRA_SUB_CLASSES = new Set(loadExtraSubClasses());
 
-let CURRENT_GROUP = localStorage.getItem('group') || 'all';
+let CURRENT_GROUP = 'all';
+let CURRENT_PLAN_DAY = '';
 let CURRENT_PLAN_DATA = null;
 let CURRENT_CLASS_NAME = '';
+let PLAN_SUBSTITUTION_INDEX = new Map();
 
 let CLASSES = [];
 let lastScroll = 0;
@@ -125,26 +126,31 @@ function normalizeCell(cell) {
     .filter(Boolean);
 }
 
+function getGroupMarker(line) {
+  const match = String(line || '').match(/\b([1-3])\s*\/\s*([2-3])\b/);
+
+  if (!match) return null;
+
+  return {
+    group: Number(match[1]),
+    total: Number(match[2])
+  };
+}
+
+function lineBelongsToCurrentGroup(line) {
+  const marker = getGroupMarker(line);
+
+  if (!marker || CURRENT_GROUP === 'all') return true;
+
+  return String(marker.group) === String(CURRENT_GROUP);
+}
+
+function getPlanCellLinesForCurrentGroup(cell) {
+  return normalizeCell(cell).filter(lineBelongsToCurrentGroup);
+}
+
 function renderCell(cell) {
-  const lines = normalizeCell(cell);
-
-  if (!lines.length) {
-    return '<div class="empty-cell"></div>';
-  }
-
-  const filtered = lines.filter(line => {
-    const lower = line.toLowerCase();
-
-    if (!lower.includes('1/2') && !lower.includes('2/2')) {
-      return true;
-    }
-
-    if (CURRENT_GROUP === 'all') return true;
-    if (CURRENT_GROUP === '1' && lower.includes('1/2')) return true;
-    if (CURRENT_GROUP === '2' && lower.includes('2/2')) return true;
-
-    return false;
-  });
+  const filtered = getPlanCellLinesForCurrentGroup(cell);
 
   if (!filtered.length) {
     return '<div class="empty-cell"></div>';
@@ -1280,20 +1286,6 @@ function getLessonNumberFromPlanRow(row) {
   return fallback ? Number(fallback[1]) : null;
 }
 
-function getPlanCellLinesForCurrentGroup(cell) {
-  const lines = normalizeCell(cell);
-
-  return lines.filter(line => {
-    const lower = line.toLowerCase();
-
-    if (!lower.includes('1/2') && !lower.includes('2/2')) return true;
-    if (CURRENT_GROUP === 'all') return true;
-    if (CURRENT_GROUP === '1' && lower.includes('1/2')) return true;
-    if (CURRENT_GROUP === '2' && lower.includes('2/2')) return true;
-
-    return false;
-  });
-}
 
 function extractTeacherNamesFromPlanCell(cell) {
   const text = getPlanCellLinesForCurrentGroup(cell)
@@ -1306,6 +1298,301 @@ function extractTeacherNamesFromPlanCell(cell) {
   const matches = [...text.matchAll(/\b[A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s+[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?/gu)];
 
   return [...new Set(matches.map(match => cleanTeacherName(match[0])).filter(Boolean))];
+}
+
+function detectPlanGroupCount(data) {
+  const text = Array.isArray(data?.rows)
+    ? data.rows
+      .flatMap(row => Array.isArray(row) ? row : [])
+      .flatMap(cell => normalizeCell(cell))
+      .join(' ')
+    : '';
+
+  let maxGroups = 1;
+  const matches = text.matchAll(/\b([1-3])\s*\/\s*([2-3])\b/g);
+
+  for (const match of matches) {
+    maxGroups = Math.max(maxGroups, Number(match[2]));
+  }
+
+  return Math.min(3, Math.max(1, maxGroups));
+}
+
+function getPlanGroupOptions(data) {
+  const count = detectPlanGroupCount(data);
+  return [
+    { value: 'all', label: 'Cała klasa' },
+    ...Array.from({ length: Math.max(0, count > 1 ? count : 0) }, (_, index) => ({
+      value: String(index + 1),
+      label: `Grupa ${index + 1}`
+    }))
+  ];
+}
+
+function getPlanGroupStorageKey(className) {
+  return `pzs2_plan_group_${normalizeClassName(className)}`;
+}
+
+function loadPlanGroup(className, data) {
+  const options = getPlanGroupOptions(data);
+  const allowed = new Set(options.map(option => option.value));
+  const key = getPlanGroupStorageKey(className);
+
+  let saved = null;
+
+  try {
+    saved = localStorage.getItem(key);
+  } catch {
+    saved = null;
+  }
+
+  if (!saved) {
+    try {
+      saved = localStorage.getItem('group');
+    } catch {
+      saved = null;
+    }
+  }
+
+  if (saved && allowed.has(saved)) return saved;
+
+  return 'all';
+}
+
+function savePlanGroup(className, group) {
+  try {
+    localStorage.setItem(getPlanGroupStorageKey(className), group);
+    // Zachowujemy także stary klucz dla kompatybilności z poprzednią wersją.
+    localStorage.setItem('group', group);
+  } catch {
+    // Brak localStorage nie powinien blokować planu.
+  }
+}
+
+function getDefaultPlanWeekday(date = new Date()) {
+  const day = date.getDay(); // 0 = niedziela ... 6 = sobota
+  const afterSchool = date.getHours() >= 20;
+
+  const weekdayIndex = {
+    1: 'poniedziałek',
+    2: 'wtorek',
+    3: 'środa',
+    4: 'czwartek',
+    5: 'piątek'
+  };
+
+  if (day >= 1 && day <= 5 && !afterSchool) {
+    return weekdayIndex[day];
+  }
+
+  let next = day;
+
+  if (day >= 1 && day <= 5 && afterSchool) {
+    next = day + 1;
+  } else if (day === 6) {
+    next = 1;
+  } else if (day === 0) {
+    next = 1;
+  }
+
+  if (next === 6 || next === 0) next = 1;
+
+  return weekdayIndex[next] || 'poniedziałek';
+}
+
+const MOBILE_PLAN_DAY_LABELS = {
+  'poniedziałek': 'Pon',
+  'wtorek': 'Wt',
+  'środa': 'Środa',
+  'czwartek': 'Czw',
+  'piątek': 'Pt'
+};
+
+const PLAN_WEEKDAYS = [
+  'poniedziałek',
+  'wtorek',
+  'środa',
+  'czwartek',
+  'piątek'
+];
+
+function getAvailablePlanDays(rows) {
+  return PLAN_WEEKDAYS.filter(day => getPlanDayColumnIndex(rows, day) >= 0);
+}
+
+function normalizeTeacherCode(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z]/g, '');
+}
+
+function isPlanTeacherCode(value) {
+  return /^[A-ZĄĆĘŁŃÓŚŹŻ][A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]$/u.test(String(value || ''));
+}
+
+function extractPlanTeacherCodesFromCell(cell) {
+  const codes = [];
+
+  getPlanCellLinesForCurrentGroup(cell).forEach(line => {
+    const tokens = String(line || '')
+      .replace(/[|;]+/g, ' ')
+      .split(/\s+/)
+      .map(token => token.replace(/^[([{]+|[)\]},]+$/g, ''))
+      .filter(Boolean);
+
+    // W planie szkolnym nauczyciel występuje jako kod typu "WM", "AŚ", "Ak",
+    // zwykle tuż przed salą. Rozpoznajemy go po 2–3 literach i wielkiej pierwszej literze,
+    // dzięki czemu nie mylimy go z nazwą przedmiotu pisaną małymi literami.
+    tokens.forEach(token => {
+      if (!isPlanTeacherCode(token)) return;
+      const code = String(token).trim();
+      if (!codes.includes(code)) codes.push(code);
+    });
+  });
+
+  return codes;
+}
+
+function getSubstitutionTeacherCodeCandidates(teacher) {
+  const raw = cleanTeacherName(teacher)
+    .replace(/\*/g, '')
+    .trim();
+
+  if (!raw) return [];
+
+  const parts = raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/\s+/)
+    .map(part => part.replace(/^[^A-Za-z]+|[^A-Za-z-]+$/g, '').trim())
+    .filter(Boolean);
+
+  if (parts.length < 2) return [];
+
+  const firstInitial = parts[0][0];
+  const firstSurname = parts[1] || '';
+
+  if (!firstInitial || !firstSurname[0]) return [];
+
+  // PZS2 zapisuje nauczycieli w planie jako dwuliterowy kod:
+  // pierwsza litera imienia + pierwsza litera nazwiska, np. A. Świtlik → AŚ.
+  return [normalizeTeacherCode(`${firstInitial}${firstSurname[0]}`)];
+}
+
+function rebuildPlanSubstitutionIndex() {
+  PLAN_SUBSTITUTION_INDEX = new Map();
+
+  const entries = getAllNormalizedEntries(SUB_DATA).filter(entry => {
+    const type = normalizeSubType(entry);
+    return type === 'cancelled' || type === 'substitution';
+  });
+
+  const dayName = getSubWeekdayName();
+
+  entries.forEach(entry => {
+    const classes = getEntryClasses(entry);
+    const lessons = Array.isArray(entry?.lessons)
+      ? [...new Set(entry.lessons.map(Number).filter(n => !Number.isNaN(n)))]
+      : [];
+
+    if (!classes.length || !lessons.length) return;
+
+    const teacher = cleanTeacherName(entry?.teacher);
+    const teacherCodes = getTranslatedTeacherCodes(teacher);
+
+    if (!teacherCodes.length) return;
+
+    classes.forEach(cls => {
+      const classKey = normalizeClassName(cls);
+      if (!classKey) return;
+
+      lessons.forEach(lesson => {
+        teacherCodes.forEach(code => {
+          const key = `${dayName}|${classKey}|${lesson}|${code}`;
+          const bucket = PLAN_SUBSTITUTION_INDEX.get(key) || [];
+
+          if (!bucket.includes(entry)) bucket.push(entry);
+          PLAN_SUBSTITUTION_INDEX.set(key, bucket);
+        });
+      });
+    });
+  });
+}
+
+function getTranslatedTeacherCodes(teacher) {
+  // To jest świadome "tłumaczenie" formatu zastępstw (np. A. Świtlik)
+  // na skróty używane przez generator planu (np. AŚ).
+  return getSubstitutionTeacherCodeCandidates(teacher);
+}
+
+function planTeacherCodeMatchesSubstitution(planCodes, substitutionTeacher) {
+  const normalizedPlanCodes = planCodes
+    .map(normalizeTeacherCode)
+    .filter(Boolean);
+  if (!normalizedPlanCodes.length) return false;
+
+  const candidates = getTranslatedTeacherCodes(substitutionTeacher);
+  const basicCandidate = candidates.find(candidate => candidate.length === 2);
+
+  // Najpierw wymagamy podstawowego kodu 2-literowego, jeżeli jest obecny w tej komórce.
+  // Dłuższy wariant (np. ACh) jest fallbackiem dla kolizji inicjałów.
+  if (basicCandidate && normalizedPlanCodes.includes(basicCandidate)) return true;
+
+  return normalizedPlanCodes.some(code => candidates.includes(code));
+}
+
+function getSubEntriesForPlanCell({ lessonNumber, dayName, cell }) {
+  if (!CURRENT_PLAN_DATA || !CURRENT_CLASS_NAME || lessonNumber == null || !dayName) return [];
+  if (dayName !== getSubWeekdayName()) return [];
+
+  const saved = getSavedClass();
+  if (!saved?.name || normalizeClassName(saved.name) !== normalizeClassName(CURRENT_CLASS_NAME)) return [];
+
+  const planTeacherCodes = extractPlanTeacherCodesFromCell(cell);
+  if (!planTeacherCodes.length) return [];
+
+  const classKey = normalizeClassName(CURRENT_CLASS_NAME);
+  const entries = [];
+
+  planTeacherCodes.forEach(planCode => {
+    const codeKey = normalizeTeacherCode(planCode);
+    const key = `${dayName}|${classKey}|${lessonNumber}|${codeKey}`;
+    (PLAN_SUBSTITUTION_INDEX.get(key) || []).forEach(entry => {
+      if (!entries.includes(entry)) entries.push(entry);
+    });
+  });
+
+  return entries;
+}
+
+function getPlanCellChanges({ lessonNumber, dayName, cell }) {
+  const entries = getSubEntriesForPlanCell({ lessonNumber, dayName, cell });
+  const cancelled = entries.filter(entry => normalizeSubType(entry) === 'cancelled');
+  const substitutions = entries.filter(entry => normalizeSubType(entry) === 'substitution');
+
+  if (cancelled.length) {
+    return {
+      type: 'cancelled',
+      entries,
+      label: 'Lekcja odwołana'
+    };
+  }
+
+  if (substitutions.length) {
+    return {
+      type: 'substitution',
+      entries,
+      label: 'Zastępstwo'
+    };
+  }
+
+  return {
+    type: '',
+    entries: [],
+    label: ''
+  };
 }
 
 function getPlanTeachersForEntry(entry) {
@@ -1574,8 +1861,13 @@ async function loadSubstitutions() {
 
     SUB_FILTER_OPEN = false;
     SUB_SHOW_ALL_ENTRIES = false;
+    rebuildPlanSubstitutionIndex();
 
     renderSubstitutions(SUB_DATA);
+
+    if (CURRENT_PLAN_DATA) {
+      renderPlan();
+    }
 
     if (aiSummary) {
       aiSummary.textContent = buildSummary(SUB_DATA, getSavedClass());
@@ -1720,13 +2012,7 @@ function renderClassButtons(list) {
   if (!classList) return;
 
   classList.innerHTML = `
-    <select id="classSelect" style="
-      width:100%;
-      padding:14px 16px;
-      border-radius:16px;
-      border:1px solid rgba(16,32,51,.12);
-      background:#fff;
-    ">
+    <select id="classSelect" class="class-select" aria-label="Wybierz klasę">
       <option value="">Wybierz klasę.</option>
       ${list.map(c => `
         <option value="${escapeHtml(c.id)}">
@@ -1737,6 +2023,11 @@ function renderClassButtons(list) {
   `;
 
   const select = document.getElementById('classSelect');
+  const saved = getSavedClass();
+
+  if (saved?.selectionVersion === CURRENT_SCHOOL_YEAR && list.some(c => c.id === saved.id)) {
+    select.value = saved.id;
+  }
 
   select.addEventListener('change', () => {
     const selected = list.find(c => c.id === select.value);
@@ -1796,38 +2087,117 @@ function renderPlan() {
 
   const header = rows[0];
   const bodyRows = rows.slice(1);
+  const groupOptions = getPlanGroupOptions(data);
+
+  if (!groupOptions.some(option => option.value === CURRENT_GROUP)) {
+    CURRENT_GROUP = 'all';
+  }
+
+  CURRENT_PLAN_DAY = getAvailablePlanDays(rows).includes(CURRENT_PLAN_DAY)
+    ? CURRENT_PLAN_DAY
+    : getDefaultPlanWeekday();
+
+  const currentDayColumn = getPlanDayColumnIndex(rows, CURRENT_PLAN_DAY);
+  const availableDays = getAvailablePlanDays(rows);
 
   planPreview.innerHTML = `
-    <div style="margin-bottom:12px; color:var(--muted);">
+    <div class="plan-meta">
       <strong>${escapeHtml(className)}</strong>
       ${data.validFrom ? ` · obowiązuje od: ${escapeHtml(data.validFrom)}` : ''}
       ${data.generatedAt ? ` · wygenerowano: ${escapeHtml(data.generatedAt)}` : ''}
     </div>
 
-    <div style="margin-bottom:12px;">
-      <select id="groupSelect" style="
-        width:100%;
-        padding:14px 16px;
-        border-radius:16px;
-        border:1px solid rgba(16,32,51,.12);
-        background:#fff;
-      ">
-        <option value="all">Cała klasa</option>
-        <option value="1">Grupa 1</option>
-        <option value="2">Grupa 2</option>
-      </select>
+    <div class="plan-controls">
+      <label class="plan-select-wrap">
+        <span class="sr-only">Wybierz grupę</span>
+        <select id="groupSelect" class="plan-select" aria-label="Wybierz grupę">
+          ${groupOptions.map(option => `
+            <option value="${option.value}">${escapeHtml(option.label)}</option>
+          `).join('')}
+        </select>
+      </label>
     </div>
 
-    <div class="timetable">
+    <div class="timetable timetable-desktop">
       <div class="timetable-row timetable-head">
         ${header.map(cell => `<div>${renderCell(cell)}</div>`).join('')}
       </div>
 
-      ${bodyRows.map(row => `
-        <div class="timetable-row">
-          ${row.map(cell => `<div>${renderCell(cell)}</div>`).join('')}
-        </div>
-      `).join('')}
+      ${bodyRows.map(row => {
+        const lessonNumber = getLessonNumberFromPlanRow(row);
+        return `
+          <div class="timetable-row">
+            ${row.map((cell, index) => {
+              const dayName = PLAN_WEEKDAYS.find(day => getPlanDayColumnIndex(rows, day) === index) || '';
+
+              if (!dayName || lessonNumber == null) {
+                return `<div>${renderCell(cell)}</div>`;
+              }
+
+              const change = getPlanCellChanges({
+                lessonNumber,
+                dayName,
+                cell
+              });
+
+              const classes = [
+                change.type ? `plan-cell--${change.type}` : ''
+              ].filter(Boolean).join(' ');
+
+              const title = change.label ? ` title="${escapeHtml(change.label)}"` : '';
+              return `<div class="${classes}"${title}>${renderCell(cell)}</div>`;
+            }).join('')}
+          </div>
+        `;
+      }).join('')}
+    </div>
+
+    <div class="timetable-mobile">
+      <div class="plan-day-tabs" role="tablist" aria-label="Dzień planu lekcji">
+        ${availableDays.map(day => `
+          <button
+            class="plan-day-tab ${day === CURRENT_PLAN_DAY ? 'active' : ''}"
+            type="button"
+            role="tab"
+            aria-selected="${day === CURRENT_PLAN_DAY ? 'true' : 'false'}"
+            data-plan-day="${escapeHtml(day)}"
+          >${escapeHtml(MOBILE_PLAN_DAY_LABELS[day] || day)}</button>
+        `).join('')}
+      </div>
+
+      <div class="mobile-plan-list">
+        ${currentDayColumn >= 0
+          ? bodyRows.map(row => {
+              const lessonNumber = getLessonNumberFromPlanRow(row);
+              const time = normalizeCell(row?.[1]).join(' · ');
+              const cell = row?.[currentDayColumn];
+              const change = getPlanCellChanges({
+                lessonNumber,
+                dayName: CURRENT_PLAN_DAY,
+                cell
+              });
+
+              const changeClass = change.type ? `plan-cell--${change.type}` : '';
+              const changeLabel = change.label
+                ? `<span class="plan-change-badge">${escapeHtml(change.label)}</span>`
+                : '';
+
+              return `
+                <article class="mobile-plan-row ${changeClass}">
+                  <div class="mobile-plan-meta">
+                    <span class="mobile-plan-number">${lessonNumber == null ? '—' : escapeHtml(lessonNumber)}</span>
+                    ${time ? `<span class="mobile-plan-time">${escapeHtml(time)}</span>` : ''}
+                  </div>
+                  <div class="mobile-plan-content ${changeClass}">
+                    ${changeLabel}
+                    ${renderCell(cell)}
+                  </div>
+                </article>
+              `;
+            }).join('')
+          : `<div class="plan-empty-day">Brak danych dla wybranego dnia.</div>`
+        }
+      </div>
     </div>
   `;
 
@@ -1838,10 +2208,20 @@ function renderPlan() {
 
     groupSelect.addEventListener('change', () => {
       CURRENT_GROUP = groupSelect.value;
-      localStorage.setItem('group', CURRENT_GROUP);
+      savePlanGroup(className, CURRENT_GROUP);
       renderPlan();
     });
   }
+
+  document.querySelectorAll('.plan-day-tab').forEach(button => {
+    button.addEventListener('click', () => {
+      const nextDay = button.dataset.planDay;
+      if (!availableDays.includes(nextDay)) return;
+
+      CURRENT_PLAN_DAY = nextDay;
+      renderPlan();
+    });
+  });
 }
 
 async function loadPlan(classId, className) {
@@ -1862,6 +2242,9 @@ async function loadPlan(classId, className) {
 
     CURRENT_PLAN_DATA = data;
     CURRENT_CLASS_NAME = className;
+    CURRENT_GROUP = loadPlanGroup(className, data);
+    CURRENT_PLAN_DAY = getDefaultPlanWeekday();
+    rebuildPlanSubstitutionIndex();
 
     renderPlan();
 
@@ -2269,16 +2652,6 @@ document.addEventListener('DOMContentLoaded', () => {
   loadDepartures();
   setInterval(() => loadDepartures({ silent: true }), 45000);
   onScroll();
-
-  if (classSearch) {
-    classSearch.addEventListener('input', () => {
-      const q = classSearch.value.trim().toLowerCase();
-
-      renderClassButtons(
-        CLASSES.filter(c => c.name.toLowerCase().includes(q))
-      );
-    });
-  }
 
   if (subToggle) {
     subToggle.addEventListener('click', () => {
