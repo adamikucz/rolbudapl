@@ -1,4 +1,4 @@
-const CACHE_NAME = "pzs2-cache-v8";
+const CACHE_NAME = "pzs2-cache-v9";
 
 const STATIC_ASSETS = [
   "/",
